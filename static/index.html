@@ -3,1217 +3,659 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>libp2p DHT Monitor</title>
+<title>libp2p // DHT Monitor</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg:        #080c0f;
-    --bg2:       #0d1419;
-    --bg3:       #111b22;
-    --border:    #1a2e3b;
-    --accent:    #00d4ff;
-    --accent2:   #00ff9d;
-    --warn:      #ffb800;
-    --danger:    #ff3860;
-    --muted:     #3a5a6e;
-    --text:      #c8dce6;
-    --text-dim:  #4a7a8a;
-    --success:   #00ff9d;
-    --mono: 'Share Tech Mono', monospace;
-    --display: 'Orbitron', sans-serif;
+    --bg-base:     #0b0e14;
+    --bg-canvas:   #111217;
+    --bg-card:     #181b1f;
+    --bg-input:    #090b10;
+    --border-subtle: #2c3235;
+    --border-strong: #3e444a;
+    
+    --text-main:   #d8d9da;
+    --text-dim:    #9f9f9f;
+    --text-accent: #3274d9;
+    
+    --color-blue:   #3274d9;
+    --color-green:  #73bf69;
+    --color-yellow: #f2cc0c;
+    --color-orange: #ff9830;
+    --color-red:    #f2495c;
+    --color-purple: #8e5bd6;
+
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    
+    --card-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    --transition-fast: 0.15s ease;
   }
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 12px;
-    min-height: 100vh;
-    overflow-x: hidden;
+    background: var(--bg-base);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
-  /* Scanline overlay */
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,212,255,0.015) 2px,
-      rgba(0,212,255,0.015) 4px
-    );
-    pointer-events: none;
-    z-index: 9999;
-  }
+  /* --- Scrollbars --- */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
 
-  /* Grid noise texture */
-  body::after {
-    content: '';
-    position: fixed; inset: 0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    opacity: 0.4;
-    z-index: 9998;
-  }
-
-  /* ── Header ── */
+  /* --- Layout --- */
   header {
+    height: 52px;
+    background: var(--bg-canvas);
+    border-bottom: 1px solid var(--border-subtle);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg2);
-    position: sticky; top: 0; z-index: 100;
-  }
-  .logo {
-    font-family: var(--display);
-    font-size: 14px;
-    font-weight: 900;
-    letter-spacing: 0.12em;
-    color: var(--accent);
-    text-shadow: 0 0 20px rgba(0,212,255,0.5);
-  }
-  .logo span { color: var(--accent2); }
-  .header-right { display: flex; align-items: center; gap: 16px; }
-  .conn-indicator {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 10px; color: var(--text-dim);
-  }
-  .conn-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--danger);
-    box-shadow: 0 0 8px var(--danger);
-    transition: all 0.3s;
-  }
-  .conn-dot.live { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
-  .ts { font-size: 10px; color: var(--text-dim); font-family: var(--mono); }
-
-  /* ── Layout ── */
-  .layout {
-    display: grid;
-    grid-template-columns: 280px 1fr;
-    grid-template-rows: auto auto 1fr;
-    gap: 1px;
-    background: var(--border);
-    min-height: calc(100vh - 47px);
+    padding: 0 20px;
+    flex-shrink: 0;
+    z-index: 100;
   }
 
-  /* ── Panels ── */
-  .panel {
-    background: var(--bg);
-    padding: 16px;
-    position: relative;
+  main {
+    flex: 1;
+    display: flex;
     overflow: hidden;
   }
-  .panel::before {
-    content: '';
-    position: absolute; top: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    opacity: 0.3;
+
+  .sidebar {
+    width: 280px;
+    background: var(--bg-canvas);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 16px;
+    gap: 16px;
   }
-  .panel-title {
-    font-family: var(--display);
-    font-size: 9px;
+
+  .content {
+    flex: 1;
+    background: var(--bg-base);
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* --- Components --- */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    box-shadow: var(--card-shadow);
+    min-width: 0;
+  }
+
+  .section-title { 
+    font-size: 10px; 
+    text-transform: uppercase; 
+    letter-spacing: 0.08em; 
+    color: var(--text-dim); 
+    margin-bottom: 12px; 
     font-weight: 700;
-    letter-spacing: 0.2em;
-    color: var(--accent);
-    text-transform: uppercase;
-    margin-bottom: 14px;
-    display: flex; align-items: center; gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
-  .panel-title::after {
+  .section-title::after {
     content: '';
     flex: 1;
     height: 1px;
-    background: linear-gradient(90deg, var(--border), transparent);
+    background: var(--border-subtle);
   }
 
-  /* ── Sidebar panels ── */
-  .sidebar {
-    grid-column: 1;
-    grid-row: 1 / -1;
-    display: flex; flex-direction: column; gap: 1px;
-    background: var(--border);
-  }
-
-  /* ── Gauge ── */
-  .gauge-wrap { margin-bottom: 16px; }
-  .gauge-label {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 5px;
-  }
-  .gauge-name { font-size: 10px; color: var(--text-dim); }
-  .gauge-val { font-size: 13px; color: var(--accent); font-weight: bold; }
-  .gauge-bar {
-    height: 6px; background: var(--bg3);
-    border-radius: 3px; overflow: hidden;
-    position: relative;
-  }
-  .gauge-fill {
-    height: 100%; border-radius: 3px;
-    background: linear-gradient(90deg, var(--accent2), var(--accent));
-    box-shadow: 0 0 8px rgba(0,212,255,0.4);
-    transition: width 0.4s cubic-bezier(0.4,0,0.2,1);
-    position: relative;
-  }
-  .gauge-fill.warn { background: linear-gradient(90deg, var(--warn), #ff8c00); }
-  .gauge-fill.danger { background: linear-gradient(90deg, var(--danger), #ff6b8a); }
-  .gauge-tokens {
-    font-size: 9px; color: var(--text-dim); margin-top: 3px;
-    display: flex; justify-content: space-between;
-  }
-
-  /* ── Big stat ── */
-  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
-  .stat-box {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px 8px;
-    text-align: center;
-  }
-  .stat-val {
-    font-family: var(--display);
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--accent);
-    line-height: 1;
-    margin-bottom: 3px;
-  }
-  .stat-val.green { color: var(--accent2); }
-  .stat-val.red { color: var(--danger); }
-  .stat-val.yellow { color: var(--warn); }
-  .stat-lbl { font-size: 8px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; }
-
-  /* ── Controls ── */
-  .control-group { margin-bottom: 14px; }
-  .control-label { font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
-  .btn-row { display: flex; gap: 4px; flex-wrap: wrap; }
-  .btn {
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 5px 10px;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    background: var(--bg2);
-    color: var(--text-dim);
-    cursor: pointer;
-    transition: all 0.15s;
-    letter-spacing: 0.05em;
-  }
-  .btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.05); }
-  .btn.active { border-color: var(--accent2); color: var(--accent2); background: rgba(0,255,157,0.08); }
-  .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
-  .btn.primary {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: rgba(0,212,255,0.08);
-  }
-  .btn.running { border-color: var(--danger); color: var(--danger); background: rgba(255,56,96,0.08); }
-
-  input[type="range"] {
-    width: 100%; accent-color: var(--accent);
-    height: 4px; cursor: pointer;
-  }
-  .range-row { display: flex; align-items: center; gap: 8px; }
-  .range-val { font-size: 11px; color: var(--accent); min-width: 32px; text-align: right; }
-  select {
-    font-family: var(--mono); font-size: 10px;
-    background: var(--bg2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 3px;
-    padding: 4px 8px; cursor: pointer; width: 100%;
-  }
-  select:focus { outline: 1px solid var(--accent); }
-
-  /* ── Main area ── */
-  .main { grid-column: 2; display: flex; flex-direction: column; gap: 1px; background: var(--border); }
-  .top-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--border); }
-  .mid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
-  .bottom-row { display: grid; grid-template-columns: 1fr; }
-
-  /* ── Chart panels ── */
-  .chart-wrap { position: relative; height: 120px; }
-  canvas { max-height: 120px; }
-
-  /* ── Active queries ── */
-  .query-list { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
-  .query-row {
+  /* Grid Layouts */
+  .top-row {
     display: grid;
-    grid-template-columns: 80px 1fr 70px 60px;
-    gap: 6px;
-    align-items: center;
-    padding: 5px 8px;
-    background: var(--bg2);
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    height: 260px;
+    flex-shrink: 0;
+  }
+
+  .bottom-row {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr 1fr;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Integrated Metric Panel */
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+  }
+  .panel-title { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.02em; }
+  .panel-main-stat {
+    font-size: 36px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+  }
+  .panel-unit { font-size: 14px; color: var(--text-dim); margin-left: 4px; font-weight: 400; }
+  .panel-sub-stats {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid rgba(255,255,255,0.05);
+    padding-top: 8px;
+  }
+  .sub-stat-item b { color: #fff; font-family: var(--font-mono); }
+
+  .chart-container {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+    margin-top: 12px;
+  }
+
+  /* Gauges in Sidebar */
+  .gauge-container { margin-bottom: 14px; }
+  .gauge-meta { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; font-family: var(--font-mono); }
+  .progress-bg { height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 3px; background: var(--color-blue); transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+
+  /* Lists & Tables */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .data-table th { text-align: left; padding: 8px 4px; color: var(--text-dim); border-bottom: 1px solid var(--border-subtle); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .data-table td { padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  
+  .log-container {
+    background: var(--bg-input);
     border-radius: 3px;
-    border-left: 2px solid transparent;
+    padding: 10px;
+    flex: 1;
+    overflow-y: auto;
+    font-family: var(--font-mono);
     font-size: 10px;
-    animation: slideIn 0.2s ease;
+    display: flex;
+    flex-direction: column-reverse;
+    border: 1px solid var(--border-subtle);
   }
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateX(-8px); }
-    to   { opacity: 1; transform: translateX(0); }
+
+  /* Buttons & Inputs */
+  .btn {
+    background: var(--border-strong);
+    color: #fff;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
   }
-  .query-row.running { border-left-color: var(--accent); }
-  .query-row.acquiring { border-left-color: var(--warn); }
-  .query-row.user { }
-  .query-row.background { opacity: 0.7; }
+  .btn:hover { background: #4e555b; border-color: var(--text-dim); }
+  .btn-primary { background: var(--color-blue); }
+  .btn-primary:hover { background: #4081e4; }
+  .btn-outline { background: transparent; border: 1px solid var(--border-strong); }
+  .btn-outline:hover { background: rgba(255,255,255,0.05); }
+  .btn.active { border-color: var(--color-blue); color: var(--color-blue); background: rgba(50, 116, 217, 0.05); }
 
-  .qid { font-size: 9px; color: var(--text-dim); font-family: var(--mono); }
-  .qpeer { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .qstatus {
-    font-size: 9px; padding: 2px 5px; border-radius: 2px;
-    text-align: center; font-weight: bold; letter-spacing: 0.05em;
-    text-transform: uppercase;
+  input, select {
+    width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle);
+    color: #fff; padding: 8px 10px; border-radius: 3px; font-size: 11px; outline: none;
+    font-family: var(--font-mono);
   }
-  .qstatus.running { background: rgba(0,212,255,0.15); color: var(--accent); }
-  .qstatus.acquiring { background: rgba(255,184,0,0.15); color: var(--warn); }
-  .qdur { color: var(--text-dim); text-align: right; font-size: 9px; }
+  input:focus, select:focus { border-color: var(--color-blue); }
 
-  /* ── Results table ── */
-  .results-table { width: 100%; border-collapse: collapse; font-size: 10px; }
-  .results-table th {
-    font-size: 8px; color: var(--text-dim); text-transform: uppercase;
-    letter-spacing: 0.12em; padding: 5px 8px; text-align: left;
-    border-bottom: 1px solid var(--border);
-    font-family: var(--display);
-  }
-  .results-table td { padding: 5px 8px; border-bottom: 1px solid rgba(26,46,59,0.5); }
-  .results-table tbody tr:hover { background: var(--bg2); }
-  .results-scroll { max-height: 240px; overflow-y: auto; }
+  /* Topology */
+  #topology { width: 100%; height: 100%; display: block; }
 
-  .badge {
-    display: inline-block;
-    font-size: 8px; padding: 2px 6px; border-radius: 2px;
-    text-transform: uppercase; letter-spacing: 0.08em; font-weight: bold;
-  }
-  .badge.success { background: rgba(0,255,157,0.12); color: var(--accent2); }
-  .badge.failed  { background: rgba(255,56,96,0.12); color: var(--danger); }
-  .badge.timeout { background: rgba(255,184,0,0.12); color: var(--warn); }
-  .badge.cancelled { background: rgba(58,90,110,0.3); color: var(--muted); }
-  .badge.user { background: rgba(0,212,255,0.1); color: var(--accent); }
-  .badge.background { background: rgba(58,90,110,0.2); color: var(--text-dim); }
+  .badge { padding: 2px 5px; border-radius: 2px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+  .badge-success { background: rgba(115, 191, 105, 0.15); color: var(--color-green); }
+  .badge-error { background: rgba(242, 73, 92, 0.15); color: var(--color-red); }
+  .badge-warn { background: rgba(242, 204, 12, 0.15); color: var(--color-yellow); }
 
-  .found-yes { color: var(--accent2); }
-  .found-no  { color: var(--text-dim); }
-
-  /* ── Network topology ── */
-  #topology { width: 100%; height: 220px; }
-
-  /* ── Log ── */
-  .log-area {
-    font-size: 9px; line-height: 1.7;
-    max-height: 120px; overflow-y: auto;
-    font-family: var(--mono);
-    padding: 4px;
-  }
-  .log-line { padding: 1px 4px; }
-  .log-line.info  { color: var(--text-dim); }
-  .log-line.ok    { color: var(--accent2); }
-  .log-line.warn  { color: var(--warn); }
-  .log-line.error { color: var(--danger); }
-
-  /* ── Scrollbar styling ── */
-  ::-webkit-scrollbar { width: 4px; height: 4px; }
-  ::-webkit-scrollbar-track { background: var(--bg); }
-  ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
-
-  /* ── Animations ── */
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-  .pulse { animation: pulse 2s infinite; }
-
-  .no-data { color: var(--text-dim); font-size: 10px; padding: 12px; text-align: center; }
-
-  /* ── Config modal overlay ── */
-  .modal-backdrop {
-    display: none; position: fixed; inset: 0;
-    background: rgba(8,12,15,0.85); z-index: 200;
-    align-items: center; justify-content: center;
-  }
-  .modal-backdrop.open { display: flex; }
-  .modal {
-    background: var(--bg2); border: 1px solid var(--accent);
-    border-radius: 6px; padding: 24px; width: 380px;
-    box-shadow: 0 0 40px rgba(0,212,255,0.15);
-  }
-  .modal-title {
-    font-family: var(--display); font-size: 11px;
-    letter-spacing: 0.15em; color: var(--accent);
-    margin-bottom: 20px; text-transform: uppercase;
-  }
-  .field-row { margin-bottom: 12px; }
-  .field-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 5px; }
-  .field-input {
-    width: 100%; font-family: var(--mono); font-size: 11px;
-    background: var(--bg3); color: var(--text);
-    border: 1px solid var(--border); border-radius: 3px;
-    padding: 6px 10px; outline: none;
-  }
-  .field-input:focus { border-color: var(--accent); }
+  /* Stable display for mode transitions */
+  .network-engine-card { border-left: 4px solid var(--color-purple); }
+  body.mode-simulated .network-engine-card { opacity: 0.5; filter: grayscale(0.5); }
+  body.mode-simulated .network-engine-card .stat-val { color: var(--text-dim); }
+  .stat-val { font-family: var(--font-mono); font-weight: 700; color: #fff; }
 </style>
 </head>
-<body>
+<body class="mode-simulated">
 
 <header>
-  <div class="logo">libp2p // <span>DHT</span> MONITOR <span style="font-size:8px;color:var(--text-dim);font-family:var(--mono);margin-left:6px" id="modeLabel">SIMULATED</span></div>
-  <div class="header-right">
-    <div class="conn-indicator">
-      <div class="conn-dot" id="connDot"></div>
-      <span id="connLabel">CONNECTING</span>
+  <div style="display: flex; align-items: center; gap: 12px;">
+    <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 2L2 10V22L16 30L30 22V10L16 2Z" stroke="var(--color-blue)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="16" cy="16" r="4" fill="var(--color-blue)"/>
+      <circle cx="16" cy="7" r="2" fill="var(--color-blue)"/>
+      <circle cx="24" cy="11.5" r="2" fill="var(--color-blue)"/>
+      <circle cx="24" cy="20.5" r="2" fill="var(--color-blue)"/>
+      <circle cx="16" cy="25" r="2" fill="var(--color-blue)"/>
+      <circle cx="8" cy="20.5" r="2" fill="var(--color-blue)"/>
+      <circle cx="8" cy="11.5" r="2" fill="var(--color-blue)"/>
+    </svg>
+    <div style="font-weight: 700; font-size: 15px; letter-spacing: -0.01em;">libp2p <span style="color:var(--text-dim); font-weight:400">DHT MONITOR</span></div>
+    <span id="modeBadge" style="font-size: 9px; padding: 2px 8px; background: rgba(50,116,217,0.1); color: var(--color-blue); border-radius: 12px; font-weight: 700; border: 1px solid rgba(50,116,217,0.2);">SIMULATED NETWORK</span>
+  </div>
+  <div style="display: flex; gap: 32px; font-size: 11px; color: var(--text-dim); font-weight: 500;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div id="connDot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--color-red); box-shadow: 0 0 8px rgba(242, 73, 92, 0.4);"></div>
+      <span id="connLabel" style="letter-spacing: 0.05em;">OFFLINE</span>
     </div>
-    <div class="ts" id="clockEl">--:--:--</div>
+    <div id="clockEl" style="font-family: var(--font-mono); background: var(--bg-input); padding: 2px 8px; border-radius: 3px; border: 1px solid var(--border-subtle);">--:--:--</div>
   </div>
 </header>
 
-<div class="layout">
-
-  <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+<main>
   <div class="sidebar">
-
-    <!-- Capacity Limiters -->
-    <div class="panel">
-      <div class="panel-title">Capacity Limiters</div>
-
-      <div class="gauge-wrap">
-        <div class="gauge-label">
-          <span class="gauge-name">Layer A — Query Pool</span>
-          <span class="gauge-val" id="qlBorr">0</span>
+    <div class="card network-engine-card">
+      <div class="section-title">Network Engine</div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <div style="font-size:9px;color:var(--text-dim);margin-bottom:2px">CONNECTIONS</div>
+          <div id="rcConn" class="stat-val" style="font-size:16px">0</div>
         </div>
-        <div class="gauge-bar"><div class="gauge-fill" id="qlBar" style="width:0%"></div></div>
-        <div class="gauge-tokens">
-          <span id="qlAvail">avail: –</span>
-          <span id="qlTotal">cap: –</span>
-        </div>
-      </div>
-
-      <div class="gauge-wrap">
-        <div class="gauge-label">
-          <span class="gauge-name">Layer B — Walk Pool</span>
-          <span class="gauge-val" id="rwlBorr">0</span>
-        </div>
-        <div class="gauge-bar"><div class="gauge-fill" id="rwlBar" style="width:0%"></div></div>
-        <div class="gauge-tokens">
-          <span id="rwlAvail">avail: –</span>
-          <span id="rwlTotal">cap: –</span>
-        </div>
-      </div>
-
-      <div class="gauge-wrap">
-        <div class="gauge-label">
-          <span class="gauge-name">Stream Pool</span>
-          <span class="gauge-val" id="smBorr">0</span>
-        </div>
-        <div class="gauge-bar"><div class="gauge-fill" id="smBar" style="width:0%"></div></div>
-        <div class="gauge-tokens">
-          <span id="smAvail">avail: –</span>
-          <span id="smTotal">cap: –</span>
+        <div>
+          <div style="font-size:9px;color:var(--text-dim);margin-bottom:2px">STREAMS</div>
+          <div id="rcStreams" class="stat-val" style="font-size:16px">0</div>
         </div>
       </div>
     </div>
 
-    <!-- Counters -->
-    <div class="panel">
-      <div class="panel-title">Query Counters</div>
-      <div class="stats-grid">
-        <div class="stat-box"><div class="stat-val" id="cTotal">0</div><div class="stat-lbl">Total</div></div>
-        <div class="stat-box"><div class="stat-val green" id="cSuccess">0</div><div class="stat-lbl">Success</div></div>
-        <div class="stat-box"><div class="stat-val red" id="cFailed">0</div><div class="stat-lbl">Failed</div></div>
-        <div class="stat-box"><div class="stat-val yellow" id="cTimeout">0</div><div class="stat-lbl">Timeout</div></div>
+    <div class="card">
+      <div class="section-title">Resource Pools</div>
+      <div class="gauge-container">
+        <div class="gauge-meta"><span>Query Capacity</span><span id="qlText">0 / 0</span></div>
+        <div class="progress-bg"><div class="progress-fill" id="qlBar"></div></div>
       </div>
-      <div class="stats-grid">
-        <div class="stat-box"><div class="stat-val" id="cSuccRate">--%</div><div class="stat-lbl">Success %</div></div>
-        <div class="stat-box"><div class="stat-val" id="cQPS">0</div><div class="stat-lbl">QPS</div></div>
-        <div class="stat-box"><div class="stat-val" id="cAvgDur">0</div><div class="stat-lbl">Avg ms</div></div>
-        <div class="stat-box"><div class="stat-val" id="cPeak">0</div><div class="stat-lbl">Peak ∥</div></div>
+      <div class="gauge-container">
+        <div class="gauge-meta"><span>Walk Capacity</span><span id="rwlText">0 / 0</span></div>
+        <div class="progress-bg"><div class="progress-fill" id="rwlBar"></div></div>
+      </div>
+      <div class="gauge-container" style="margin-bottom:0">
+        <div class="gauge-meta"><span>Stream Capacity</span><span id="smText">0 / 0</span></div>
+        <div class="progress-bg"><div class="progress-fill" id="smBar"></div></div>
       </div>
     </div>
 
-    <!-- Query controls -->
-    <div class="panel">
-      <div class="panel-title">Fire Query</div>
-      <div class="control-group">
-        <div class="control-label">Target</div>
-        <div class="btn-row" id="queryModeRow">
-          <button class="btn active" data-mode="known" onclick="setQueryMode('known',this)">KNOWN</button>
-          <button class="btn" data-mode="unknown" onclick="setQueryMode('unknown',this)">UNKNOWN</button>
-        </div>
+    <div class="card">
+      <div class="section-title">DHT Interaction</div>
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <button class="btn btn-outline active" onclick="setQueryMode('known',this)" style="flex:1">KNOWN</button>
+        <button class="btn btn-outline" onclick="setQueryMode('unknown',this)" style="flex:1">UNKNOWN</button>
       </div>
-      <div class="control-group">
-        <button class="btn primary" style="width:100%;padding:8px" onclick="fireQuery()">► FIND_PEER</button>
-      </div>
-
-      <div class="panel-title" style="margin-top:8px">Load Generator</div>
-      <div class="control-group">
-        <div class="control-label">Queries/sec</div>
-        <div class="range-row">
-          <input type="range" id="qpsRange" min="0.5" max="15" step="0.5" value="2"
-                 oninput="document.getElementById('qpsVal').textContent=this.value">
-          <span class="range-val" id="qpsVal">2</span>
-        </div>
-      </div>
-      <div class="control-group">
-        <div class="control-label">Mode</div>
-        <select id="loadMode">
-          <option value="mixed">MIXED (50/50)</option>
-          <option value="known">KNOWN PEERS</option>
-          <option value="unknown">UNKNOWN PEERS</option>
-        </select>
-      </div>
-      <button class="btn primary" id="loadBtn" style="width:100%;padding:8px" onclick="toggleLoad()">
-        ► START LOAD GEN
+      <button class="btn btn-primary" style="width:100%; padding: 10px; font-size: 12px;" onclick="fireQuery()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        FIRE FIND_PEER
       </button>
     </div>
 
-    <!-- Network scenario -->
-    <div class="panel">
-      <div class="panel-title">Network Scenario</div>
-      <div class="btn-row" style="flex-direction:column; gap:4px">
-        <button class="btn active" id="sc-NORMAL"   onclick="setScenario('NORMAL')">NORMAL</button>
-        <button class="btn" id="sc-DEGRADED" onclick="setScenario('DEGRADED')">DEGRADED</button>
-        <button class="btn danger" id="sc-STRESSED"  onclick="setScenario('STRESSED')">STRESSED</button>
-        <button class="btn danger" id="sc-SATURATED" onclick="setScenario('SATURATED')">SATURATED</button>
+    <div class="card">
+      <div class="section-title">Traffic Generator</div>
+      <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 6px; display: flex; justify-content: space-between;">
+        <span>Throughput Rate:</span>
+        <span style="color:var(--color-blue); font-weight: 700;"><span id="qpsVal">2</span> QPS</span>
       </div>
+      <input type="range" id="qpsRange" min="0.5" max="20" step="0.5" value="2" oninput="document.getElementById('qpsVal').textContent=this.value" style="accent-color: var(--color-blue); margin-bottom: 12px;">
+      <select id="loadMode" style="margin-bottom: 12px;">
+        <option value="mixed">Mixed Workload (50/50)</option>
+        <option value="known">Known Peer IDs Only</option>
+        <option value="unknown">Random Hash Peer IDs</option>
+      </select>
+      <button class="btn btn-outline" id="loadBtn" style="width:100%; padding: 8px;" onclick="toggleLoad()">START LOAD GENERATOR</button>
     </div>
 
-    <!-- DHT Value Store (real mode) -->
-    <div class="panel" id="dhtPanel" style="display:none">
-      <div class="panel-title">DHT Value Store</div>
-      <div class="control-group">
-        <div class="control-label">Key</div>
-        <input class="field-input" id="dhtKey" placeholder="/app/mykey" style="margin-bottom:6px">
-        <div class="control-label">Value</div>
-        <input class="field-input" id="dhtVal" placeholder="my data" style="margin-bottom:6px">
-        <div class="btn-row">
-          <button class="btn primary" onclick="dhtPut()">PUT</button>
-          <button class="btn" onclick="dhtGet()">GET</button>
-          <button class="btn" onclick="dhtProvide()">PROVIDE</button>
-          <button class="btn" onclick="dhtFindProviders()">FIND PROV</button>
-        </div>
-        <div class="log-area" id="dhtLog" style="max-height:60px;margin-top:6px;font-size:9px"></div>
-      </div>
+    <div class="card" style="margin-top: auto;">
+      <button class="btn btn-outline" style="width:100%" onclick="openConfig()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        SYSTEM CONFIG
+      </button>
     </div>
-
-    <!-- PubSub (real mode) -->
-    <div class="panel" id="pubsubPanel" style="display:none">
-      <div class="panel-title">GossipSub PubSub</div>
-      <div class="control-group">
-        <div class="control-label">Topic</div>
-        <input class="field-input" id="psTopic" placeholder="/dht-monitor/events/1.0.0" style="margin-bottom:6px">
-        <div class="control-label">Message</div>
-        <input class="field-input" id="psMsg" placeholder="hello network" style="margin-bottom:6px">
-        <div class="btn-row">
-          <button class="btn primary" onclick="psSubscribe()">SUB</button>
-          <button class="btn" onclick="psUnsubscribe()">UNSUB</button>
-          <button class="btn" onclick="psPublish()">PUBLISH</button>
-        </div>
-        <div style="margin-top:6px;font-size:9px;color:var(--text-dim)">
-          Topics: <span id="psTopics">none</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Peer Connect (real mode) -->
-    <div class="panel" id="peerPanel" style="display:none">
-      <div class="panel-title">Peer Connect</div>
-      <div class="control-group">
-        <div class="control-label">Multiaddr</div>
-        <input class="field-input" id="peerAddr" placeholder="/ip4/.../tcp/.../p2p/Qm..." style="margin-bottom:6px">
-        <button class="btn primary" style="width:100%;padding:6px" onclick="peerConnect()">CONNECT</button>
-        <div style="margin-top:6px;font-size:9px;color:var(--text-dim)">
-          Connected: <span id="peerCount">0</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Config -->
-    <div class="panel">
-      <div class="panel-title">Configuration</div>
-      <button class="btn primary" style="width:100%;padding:7px" onclick="openConfig()">⚙ CONFIGURE LIMITS</button>
-    </div>
-
   </div>
 
-  <!-- ═══════════════════ MAIN ═══════════════════ -->
-  <div class="main">
-
-    <!-- Row 1: charts -->
+  <div class="content">
     <div class="top-row">
-      <div class="panel">
-        <div class="panel-title">Throughput (QPS)</div>
-        <div class="chart-wrap"><canvas id="qpsChart"></canvas></div>
+      <div class="card" style="border-top: 3px solid var(--color-blue);">
+        <div class="panel-header"><span class="panel-title">Throughput</span></div>
+        <div class="panel-main-stat"><span id="cQPS">0.0</span><span class="panel-unit">QPS</span></div>
+        <div class="panel-sub-stats">
+          <span class="sub-stat-item">Total Ops: <b id="cTotal">0</b></span>
+          <span class="sub-stat-item">Success Rate: <b id="cRate">0.0</b>%</span>
+        </div>
+        <div class="chart-container"><canvas id="qpsChart"></canvas></div>
       </div>
-      <div class="panel">
-        <div class="panel-title">Query Duration (ms)</div>
-        <div class="chart-wrap"><canvas id="durChart"></canvas></div>
+      
+      <div class="card" style="border-top: 3px solid var(--color-green);">
+        <div class="panel-header"><span class="panel-title">DHT Latency</span></div>
+        <div class="panel-main-stat"><span id="cLat">0</span><span class="panel-unit">ms</span></div>
+        <div class="panel-sub-stats">
+          <span class="sub-stat-item">Avg Latency: <b id="cAvg">0</b>ms</span>
+          <span class="sub-stat-item">Network: <b id="cScenario">NORMAL</b></span>
+        </div>
+        <div class="chart-container"><canvas id="durChart"></canvas></div>
       </div>
-      <div class="panel">
-        <div class="panel-title">Concurrency</div>
-        <div class="chart-wrap"><canvas id="concChart"></canvas></div>
+
+      <div class="card" style="border-top: 3px solid var(--color-yellow);">
+        <div class="panel-header"><span class="panel-title">Concurrency</span></div>
+        <div class="panel-main-stat"><span id="cActive">0</span></div>
+        <div class="panel-sub-stats">
+          <span class="sub-stat-item">Peak: <b id="cPeak">0</b></span>
+          <span class="sub-stat-item">Waiting: <b id="cAcq">0</b></span>
+        </div>
+        <div class="chart-container"><canvas id="concChart"></canvas></div>
       </div>
     </div>
 
-    <!-- Row 2: live queries + network -->
-    <div class="mid-row">
-      <div class="panel">
-        <div class="panel-title">Live Queries</div>
-        <div class="query-list" id="liveQueries">
-          <div class="no-data">No active queries</div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-title">Network Topology</div>
-        <svg id="topology"></svg>
-        <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--text-dim)">
-          <span style="color:var(--accent2)">● Online</span>
-          <span style="color:var(--danger)">● Offline</span>
-          <span id="topoCount">– nodes</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Row 2.5: ResourceManager + Node Info (real mode) -->
-    <div class="mid-row" id="rcmgrRow" style="display:none">
-      <div class="panel">
-        <div class="panel-title">ResourceManager (libp2p)</div>
-        <div class="stats-grid">
-          <div class="stat-box"><div class="stat-val" id="rcConn">0</div><div class="stat-lbl">Connections</div></div>
-          <div class="stat-box"><div class="stat-val" id="rcStreams">0</div><div class="stat-lbl">Streams</div></div>
-          <div class="stat-box"><div class="stat-val" id="rcMemMB">0</div><div class="stat-lbl">Memory MB</div></div>
-          <div class="stat-box"><div class="stat-val green" id="rcCB">OK</div><div class="stat-lbl">Circuit Breaker</div></div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-title">Node Stats (libp2p)</div>
-        <div class="stats-grid">
-          <div class="stat-box"><div class="stat-val" id="nsDhtQ">0</div><div class="stat-lbl">DHT Queries</div></div>
-          <div class="stat-box"><div class="stat-val" id="nsPuts">0</div><div class="stat-lbl">DHT Puts</div></div>
-          <div class="stat-box"><div class="stat-val" id="nsGets">0</div><div class="stat-lbl">DHT Gets</div></div>
-          <div class="stat-box"><div class="stat-val green" id="nsPubRx">0</div><div class="stat-lbl">PubSub RX</div></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Row 3: results table + log -->
     <div class="bottom-row">
-      <div class="panel">
-        <div class="panel-title">Recent Results</div>
-        <div class="results-scroll">
-          <table class="results-table">
+      <div class="card">
+        <div class="section-title">Network Topology</div>
+        <div id="topoCount" style="position: absolute; top: 16px; right: 16px; font-size: 10px; font-family: var(--font-mono); color: var(--color-green); font-weight: 700;">0 Nodes Online</div>
+        <div style="flex:1; overflow:hidden; position:relative;">
+          <svg id="topology"></svg>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Network Results</div>
+        <div style="flex:1; overflow-y: auto;">
+          <table class="data-table">
             <thead>
-              <tr>
-                <th>Query ID</th>
-                <th>Peer ID</th>
-                <th>Priority</th>
-                <th>Status</th>
-                <th>Found</th>
-                <th>Hops</th>
-                <th>Duration</th>
-              </tr>
+              <tr><th>ID</th><th>Peer ID</th><th>Status</th><th>Lat</th><th>Hops</th></tr>
             </thead>
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
       </div>
-    </div>
 
-    <!-- Log -->
-    <div class="panel">
-      <div class="panel-title">Event Log</div>
-      <div class="log-area" id="logArea"></div>
+      <div class="card">
+        <div class="section-title">Events & System Logs</div>
+        <div id="liveQueries" style="margin-bottom: 12px; max-height: 120px; overflow-y: auto;"></div>
+        <div class="log-container" id="logArea"></div>
+      </div>
     </div>
-
   </div>
-</div>
+</main>
 
-<!-- Config modal -->
-<div class="modal-backdrop" id="configModal">
-  <div class="modal">
-    <div class="modal-title">⚙ Configure Resource Limits</div>
-    <div class="field-row">
-      <div class="field-label">Max Concurrent Queries (Layer A)</div>
-      <input class="field-input" id="cfgMaxQ" type="number" min="2" max="50" value="10">
+<div id="configModal" style="position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:1000; backdrop-filter: blur(4px);">
+  <div class="card" style="width: 360px; padding: 24px;">
+    <h3 style="margin-bottom:20px; font-size: 15px; font-weight: 700; color: #fff; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px;">Resource Limit Config</h3>
+    <div style="margin-bottom:16px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">MAX CONCURRENT QUERIES</span>
+      <input type="number" id="cfgMaxQ">
     </div>
-    <div class="field-row">
-      <div class="field-label">Max Random Walks (Layer B)</div>
-      <input class="field-input" id="cfgMaxW" type="number" min="1" max="20" value="3">
+    <div style="margin-bottom:16px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">MAX RANDOM WALKS</span>
+      <input type="number" id="cfgMaxW">
     </div>
-    <div class="field-row">
-      <div class="field-label">Query Timeout (seconds)</div>
-      <input class="field-input" id="cfgTimeout" type="number" min="1" max="120" value="20">
+    <div style="margin-bottom:24px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">QUERY TIMEOUT (SECONDS)</span>
+      <input type="number" id="cfgTimeout">
     </div>
-    <div class="field-row">
-      <div class="field-label">Max Streams</div>
-      <input class="field-input" id="cfgMaxS" type="number" min="5" max="200" value="50">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:16px">
-      <button class="btn primary" style="flex:1;padding:8px" onclick="applyConfig()">APPLY</button>
-      <button class="btn" style="flex:1;padding:8px" onclick="closeConfig()">CANCEL</button>
+    <div style="display:flex; gap:12px;">
+      <button class="btn btn-primary" style="flex:1; font-size: 12px;" onclick="applyConfig()">APPLY CHANGES</button>
+      <button class="btn" style="flex:1; font-size: 12px;" onclick="closeConfig()">CANCEL</button>
     </div>
   </div>
 </div>
 
 <script>
-// ─────────────────────────────────────────────────
-// State
-// ─────────────────────────────────────────────────
 const MAX_HISTORY = 60;
-const qpsHistory  = Array(MAX_HISTORY).fill(0);
-const durHistory  = Array(MAX_HISTORY).fill(0);
-const concHistory = Array(MAX_HISTORY).fill(0);
-const labels      = Array(MAX_HISTORY).fill('');
-
-let queryMode  = 'known';
+const charts = {};
+let queryMode = 'known';
 let loadActive = false;
-let currentScenario = 'NORMAL';
 let lastSnapshot = null;
+let ws = null;
 
-// ─────────────────────────────────────────────────
-// Chart.js setup
-// ─────────────────────────────────────────────────
-const chartDefaults = {
-  responsive: true, maintainAspectRatio: false, animation: false,
-  plugins: { legend: { display: false } },
-  scales: {
-    x: { display: false },
-    y: {
-      grid: { color: 'rgba(26,46,59,0.6)', drawBorder: false },
-      ticks: { color: '#3a5a6e', font: { family: "'Share Tech Mono'", size: 9 } },
-      border: { display: false },
+function init() {
+  setupCharts();
+  connectWS();
+  setInterval(() => {
+    document.getElementById('clockEl').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  }, 1000);
+}
+
+function setupCharts() {
+  const cfg = (color) => ({
+    responsive: true, maintainAspectRatio: false, animation: false,
+    elements: { line: { tension: 0.4, borderWidth: 2, borderColor: color }, point: { radius: 0 } },
+    plugins: { legend: { display: false } },
+    scales: { 
+      x: { display: false }, 
+      y: { 
+        beginAtZero: true, 
+        grid: { color: 'rgba(255,255,255,0.03)', drawBorder: false }, 
+        ticks: { display: false } 
+      } 
     }
-  },
-};
-
-function makeChart(id, color, fillColor) {
-  return new Chart(document.getElementById(id), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        data: [...(id === 'qpsChart' ? qpsHistory : id === 'durChart' ? durHistory : concHistory)],
-        borderColor: color,
-        backgroundColor: fillColor,
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-      }]
-    },
-    options: { ...chartDefaults }
   });
+
+  const makeChart = (id, color) => ({
+    obj: new Chart(document.getElementById(id), {
+      type: 'line',
+      data: { labels: Array(MAX_HISTORY).fill(''), datasets: [{ data: Array(MAX_HISTORY).fill(0), fill: true, backgroundColor: color+'10' }] },
+      options: cfg(color)
+    }),
+    history: Array(MAX_HISTORY).fill(0)
+  });
+
+  charts.qps = makeChart('qpsChart', '#3274d9');
+  charts.dur = makeChart('durChart', '#73bf69');
+  charts.conc = makeChart('concChart', '#f2cc0c');
 }
 
-const qpsChart  = makeChart('qpsChart',  'rgba(0,212,255,0.8)',  'rgba(0,212,255,0.08)');
-const durChart  = makeChart('durChart',  'rgba(0,255,157,0.8)',  'rgba(0,255,157,0.06)');
-const concChart = makeChart('concChart', 'rgba(255,184,0,0.8)',  'rgba(255,184,0,0.06)');
-
-function pushChart(chart, arr, val) {
-  arr.push(val);
-  if (arr.length > MAX_HISTORY) arr.shift();
-  chart.data.datasets[0].data = [...arr];
-  chart.update('none');
+function updateChart(key, val) {
+  const c = charts[key];
+  c.history.push(val);
+  if (c.history.length > MAX_HISTORY) c.history.shift();
+  c.obj.data.datasets[0].data = [...c.history];
+  c.obj.update('none');
 }
 
-// ─────────────────────────────────────────────────
-// WebSocket
-// ─────────────────────────────────────────────────
-let ws;
-let reconnTimer;
-
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-
+function connectWS() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onopen = () => {
-    clearTimeout(reconnTimer);
-    setConn(true);
-    log('WebSocket connected', 'ok');
+    document.getElementById('connDot').style.background = 'var(--color-green)';
+    document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(115, 191, 105, 0.5)';
+    document.getElementById('connLabel').textContent = 'CONNECTED';
   };
-
-  ws.onmessage = ({ data }) => {
-    try { handleSnapshot(JSON.parse(data)); }
-    catch(e) { console.error('Parse error:', e); }
-  };
-
+  ws.onmessage = (e) => handleSnapshot(JSON.parse(e.data));
   ws.onclose = () => {
-    setConn(false);
-    log('WebSocket disconnected — reconnecting…', 'warn');
-    reconnTimer = setTimeout(connect, 2000);
+    document.getElementById('connDot').style.background = 'var(--color-red)';
+    document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(242, 73, 92, 0.5)';
+    document.getElementById('connLabel').textContent = 'OFFLINE';
+    setTimeout(connectWS, 2000);
   };
-
-  ws.onerror = () => ws.close();
 }
 
-function setConn(live) {
-  document.getElementById('connDot').classList.toggle('live', live);
-  document.getElementById('connLabel').textContent = live ? 'LIVE' : 'OFFLINE';
-}
-
-// ─────────────────────────────────────────────────
-// Snapshot handler
-// ─────────────────────────────────────────────────
 function handleSnapshot(snap) {
   lastSnapshot = snap;
-  updateModeUI(snap);
   const coord = snap.coordinator || {};
-  const cl    = snap.capacity_limiter || {};
-  const rwl   = snap.random_walk_limiter || {};
-  const sm    = (snap.stream_manager || {});
-  const pool  = sm.pool || {};
-  const counters = coord.counters || {};
-  const rates    = coord.rates    || {};
-  const conc     = coord.concurrency || {};
+  const rates = coord.rates || {};
+  const conc = coord.concurrency || {};
 
-  // Gauges
-  setGauge('ql', cl);
-  setGauge('rwl', rwl);
-  setGaugeRaw('sm', pool.open||0, pool.open||0, (sm.config||{}).max_streams||50, pool.utilisation_pct||0);
+  setText('cTotal', coord.counters?.total || 0);
+  setText('cRate', (rates.success_pct || 0).toFixed(1));
+  setText('cQPS', (rates.throughput_qps || 0).toFixed(1));
+  setText('cLat', rates.avg_duration_ms || 0);
+  setText('cAvg', rates.avg_duration_ms || 0);
+  setText('cPeak', conc.peak || 0);
+  setText('cActive', (conc.current || 0));
+  setText('cAcq', conc.acquiring || 0);
+  setText('cScenario', snap.network?.scenario || 'NORMAL');
 
-  // Counters
-  setText('cTotal',   counters.total   || 0);
-  setText('cSuccess', counters.success || 0);
-  setText('cFailed',  counters.failed  || 0);
-  setText('cTimeout', counters.timeout || 0);
-  setText('cSuccRate', (rates.success_pct||0) + '%');
-  setText('cQPS',      rates.throughput_qps || 0);
-  setText('cAvgDur',   rates.avg_duration_ms || 0);
-  setText('cPeak',     conc.peak || 0);
-
-  // Charts
-  pushChart(qpsChart,  qpsHistory,  rates.throughput_qps || 0);
-  pushChart(durChart,  durHistory,  rates.avg_duration_ms || 0);
-  pushChart(concChart, concHistory, (conc.current||0) + (conc.acquiring||0));
-
-  // Live queries
-  renderLiveQueries(snap.live_queries || []);
-
-  // Results
-  renderResults(snap.recent_results || []);
-
-  // Topology
-  renderTopology(snap.nodes || []);
-}
-
-function setGauge(prefix, data) {
-  const pct = data.utilisation_pct || 0;
-  setGaugeRaw(prefix, data.borrowed||0, data.borrowed||0, data.total||0, pct);
-}
-
-function setGaugeRaw(prefix, borrowed, val, total, pct) {
-  const bar = document.getElementById(prefix + 'Bar');
-  const level = pct > 80 ? 'danger' : pct > 50 ? 'warn' : '';
-  bar.style.width = pct + '%';
-  bar.className = 'gauge-fill' + (level ? ' ' + level : '');
-  setText(prefix + 'Borr', borrowed);
-  setText(prefix + 'Avail', 'avail: ' + (total - borrowed));
-  setText(prefix + 'Total', 'cap: ' + total);
-}
-
-// ─────────────────────────────────────────────────
-// Live queries
-// ─────────────────────────────────────────────────
-function renderLiveQueries(queries) {
-  const el = document.getElementById('liveQueries');
-  if (!queries.length) {
-    el.innerHTML = '<div class="no-data">No active queries</div>';
-    return;
+  updateGauge('ql', snap.capacity_limiter);
+  updateGauge('rwl', snap.random_walk_limiter);
+  if (snap.stream_manager) {
+    const sm = snap.stream_manager;
+    updateGaugeRaw('sm', sm.pool?.open, sm.config?.max_streams, sm.pool?.utilisation_pct);
   }
-  el.innerHTML = queries.map(q => `
-    <div class="query-row ${q.status} ${q.priority}">
-      <span class="qid">${q.query_id}</span>
-      <span class="qpeer">${q.peer_id}</span>
-      <span class="qstatus ${q.status}">${q.status}</span>
-      <span class="qdur">${q.elapsed_ms}ms</span>
-    </div>
-  `).join('');
+
+  updateChart('qps', rates.throughput_qps || 0);
+  updateChart('dur', rates.avg_duration_ms || 0);
+  updateChart('conc', (conc.current || 0) + (conc.acquiring || 0));
+
+  renderResults(snap.recent_results || []);
+  renderLiveQueries(snap.live_queries || []);
+  renderTopology(snap.nodes || []);
+
+  const isReal = snap.mode === 'real' || snap.network?.is_real_libp2p;
+  document.body.classList.toggle('mode-real', isReal);
+  document.body.classList.toggle('mode-simulated', !isReal);
+  document.getElementById('modeBadge').textContent = isReal ? 'REAL libp2p 0.6.0' : 'SIMULATED NETWORK';
+  
+  if (isReal) {
+    const rc = snap.resource_manager || {};
+    setText('rcConn', rc.active_connections || rc.total_connections || 0);
+    setText('rcStreams', rc.active_streams || rc.total_streams || 0);
+  }
 }
 
-// ─────────────────────────────────────────────────
-// Results table
-// ─────────────────────────────────────────────────
-function renderResults(results) {
-  const tbody = document.getElementById('resultsBody');
-  tbody.innerHTML = results.map(r => `
+function updateGauge(id, data) {
+  if (data) updateGaugeRaw(id, data.borrowed, data.total, data.utilisation_pct);
+}
+
+function updateGaugeRaw(id, val, total, pct) {
+  setText(id + 'Text', `${val || 0} / ${total || 0}`);
+  const bar = document.getElementById(id + 'Bar');
+  bar.style.width = (pct || 0) + '%';
+  bar.style.background = pct > 85 ? 'var(--color-red)' : pct > 60 ? 'var(--color-orange)' : 'var(--color-blue)';
+}
+
+function renderResults(res) {
+  const body = document.getElementById('resultsBody');
+  body.innerHTML = res.slice(0, 15).map(r => `
     <tr>
-      <td style="color:var(--text-dim);font-size:9px">${r.query_id}</td>
-      <td style="color:var(--text)">${r.peer_id}</td>
-      <td><span class="badge ${r.priority}">${r.priority}</span></td>
-      <td><span class="badge ${r.status}">${r.status}</span></td>
-      <td class="${r.found ? 'found-yes' : 'found-no'}">${r.found ? '✓ YES' : '✗ NO'}</td>
-      <td style="color:var(--text-dim)">${r.hops || 0}</td>
-      <td style="color:var(--accent)">${r.duration_ms}ms</td>
+      <td style="color:var(--color-blue); font-family:var(--font-mono); font-size:10px">${r.query_id}</td>
+      <td title="${r.peer_id_full}" style="color:var(--text-main)">${r.peer_id}</td>
+      <td><span class="badge ${r.status==='success'?'badge-success':r.status==='timeout'?'badge-warn':'badge-error'}">${r.status}</span></td>
+      <td style="font-family:var(--font-mono); text-align:right">${Math.round(r.duration_ms)}ms</td>
+      <td style="color:var(--text-dim); text-align:center">${r.hops||0}</td>
     </tr>
   `).join('');
 }
 
-// ─────────────────────────────────────────────────
-// Topology SVG
-// ─────────────────────────────────────────────────
-let topoNodes = [];
-function renderTopology(nodes) {
-  if (!nodes.length) return;
-  // Only re-layout on count change
-  if (nodes.length !== topoNodes.length) {
-    layoutTopology(nodes);
-    topoNodes = nodes;
-  } else {
-    // Just update colours
-    nodes.forEach((n, i) => {
-      const circle = document.getElementById('topo-' + i);
-      if (circle) {
-        circle.setAttribute('fill', n.online ? 'var(--accent2)' : 'var(--danger)');
-      }
-    });
+function renderLiveQueries(qs) {
+  const el = document.getElementById('liveQueries');
+  if (qs.length === 0) {
+    el.innerHTML = '<div style="font-size:10px; color:var(--text-dim); text-align:center; padding:10px; border:1px dashed var(--border-subtle)">NO ACTIVE DHT OPERATIONS</div>';
+    return;
   }
-  document.getElementById('topoCount').textContent = `${nodes.filter(n=>n.online).length}/${nodes.length} online`;
+  el.innerHTML = qs.map(q => `
+    <div style="display:flex; justify-content:space-between; font-size:10px; margin-bottom:4px; padding:6px; background:rgba(50,116,217,0.08); border:1px solid rgba(50,116,217,0.2); border-radius:3px;">
+      <span style="color:var(--color-blue); font-weight:700">${q.query_id}</span>
+      <span style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; margin:0 8px;">${q.peer_id}</span>
+      <span style="color:var(--color-orange); font-weight:700">${q.status.toUpperCase()}</span>
+    </div>
+  `).join('');
 }
 
-function layoutTopology(nodes) {
+function renderTopology(nodes) {
   const svg = document.getElementById('topology');
-  const W = svg.clientWidth || 400;
-  const H = 220;
+  if (!svg) return;
+  const parent = svg.parentElement;
+  const W = parent.clientWidth, H = parent.clientHeight;
+  if (W === 0 || H === 0) return;
+
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-
-  const cx = W / 2, cy = H / 2;
-  const count = Math.min(nodes.length, 30);
-  const r1 = Math.min(W, H) * 0.38;
-  const r2 = r1 * 0.55;
-
   svg.innerHTML = '';
   
-  // Draw some spoke lines
-  for (let i = 0; i < Math.min(count, 6); i++) {
-    const a = (i / Math.min(count, 6)) * Math.PI * 2;
-    const x = cx + Math.cos(a) * r1;
-    const y = cy + Math.sin(a) * r1;
-    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
-    line.setAttribute('x1', cx); line.setAttribute('y1', cy);
-    line.setAttribute('x2', x);  line.setAttribute('y2', y);
-    line.setAttribute('stroke', 'rgba(0,212,255,0.08)');
-    line.setAttribute('stroke-width', '0.5');
-    svg.appendChild(line);
-  }
-
+  const cx = W/2, cy = H/2, r = Math.min(W, H) * 0.38;
+  const count = Math.min(nodes.length, 36);
+  
   nodes.slice(0, count).forEach((n, i) => {
-    const radius = i < count * 0.6 ? r1 : r2;
-    const angle  = (i / count) * Math.PI * 2 - Math.PI / 2;
-    const x = cx + Math.cos(angle) * radius;
-    const y = cy + Math.sin(angle) * radius;
-
-    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
-    circle.setAttribute('id', 'topo-' + i);
-    circle.setAttribute('cx', x); circle.setAttribute('cy', y);
-    circle.setAttribute('r', 4);
-    circle.setAttribute('fill', n.online ? 'var(--accent2)' : 'var(--danger)');
-    circle.setAttribute('opacity', n.online ? '0.8' : '0.4');
+    const a = (i / count) * Math.PI * 2 - (Math.PI / 2);
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', cx); line.setAttribute('y1', cy); line.setAttribute('x2', x); line.setAttribute('y2', y);
+    line.setAttribute('stroke', 'rgba(255,255,255,0.04)'); svg.appendChild(line);
+    
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', x); circle.setAttribute('cy', y); circle.setAttribute('r', 3.5);
+    circle.setAttribute('fill', n.online ? 'var(--color-green)' : 'var(--color-red)');
+    circle.setAttribute('opacity', n.online ? '0.9' : '0.4');
+    if (n.online) circle.setAttribute('style', 'filter: drop-shadow(0 0 3px var(--color-green));');
     svg.appendChild(circle);
   });
-
-  // Centre node
-  const centre = document.createElementNS('http://www.w3.org/2000/svg','circle');
-  centre.setAttribute('cx', cx); centre.setAttribute('cy', cy);
-  centre.setAttribute('r', 8);
-  centre.setAttribute('fill', 'none');
-  centre.setAttribute('stroke', 'var(--accent)');
-  centre.setAttribute('stroke-width', '1.5');
-  centre.setAttribute('opacity', '0.6');
-  svg.appendChild(centre);
-}
-
-// ─────────────────────────────────────────────────
-// Controls
-// ─────────────────────────────────────────────────
-function setQueryMode(mode, btn) {
-  queryMode = mode;
-  document.querySelectorAll('#queryModeRow .btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  
+  const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  center.setAttribute('cx', cx); center.setAttribute('cy', cy); center.setAttribute('r', 7);
+  center.setAttribute('fill', 'var(--color-blue)'); 
+  center.setAttribute('style', 'filter: drop-shadow(0 0 6px var(--color-blue));');
+  svg.appendChild(center);
+  
+  setText('topoCount', `${nodes.filter(n=>n.online).length} Nodes Online`);
 }
 
 async function fireQuery() {
-  try {
-    const res = await fetch('/api/query', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ mode: queryMode })
-    });
-    const data = await res.json();
-    log(`FIND_PEER fired → ${data.status} (${data.duration_ms}ms)`, 
-        data.status === 'success' ? 'ok' : 'warn');
-  } catch(e) { log('Query request failed: ' + e.message, 'error'); }
+  await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: queryMode }) });
 }
 
 async function toggleLoad() {
   loadActive = !loadActive;
   const btn = document.getElementById('loadBtn');
   const qps = parseFloat(document.getElementById('qpsRange').value);
-  const mode = document.getElementById('loadMode').value;
-
-  try {
-    await fetch('/api/loadgen', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ active: loadActive, qps, mode })
-    });
-    btn.textContent = loadActive ? '■ STOP LOAD GEN' : '► START LOAD GEN';
-    btn.className = loadActive ? 'btn running' : 'btn primary';
-    log(`Load generator ${loadActive ? 'STARTED' : 'STOPPED'} (${qps} QPS, ${mode})`, 
-        loadActive ? 'warn' : 'ok');
-  } catch(e) { log('Load gen error: ' + e.message, 'error'); }
+  await fetch('/api/loadgen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: loadActive, qps, mode: document.getElementById('loadMode').value }) });
+  btn.textContent = loadActive ? 'STOP LOAD GENERATOR' : 'START LOAD GENERATOR';
+  btn.classList.toggle('btn-primary', loadActive);
 }
 
-async function setScenario(name) {
-  currentScenario = name;
-  document.querySelectorAll('[id^="sc-"]').forEach(b => b.classList.remove('active'));
-  document.getElementById('sc-' + name)?.classList.add('active');
-  try {
-    await fetch('/api/network/scenario', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ scenario: name })
-    });
-    log(`Network scenario → ${name}`, 'warn');
-    topoNodes = []; // force redraw
-  } catch(e) { log('Scenario error: ' + e.message, 'error'); }
+function setQueryMode(m, b) {
+  queryMode = m;
+  document.querySelectorAll('.sidebar .btn-outline').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
 }
 
 function openConfig() {
   if (lastSnapshot) {
-    const cfg = lastSnapshot.coordinator?.config || {};
-    const sm  = lastSnapshot.stream_manager?.config || {};
-    document.getElementById('cfgMaxQ').value    = cfg.max_concurrent_queries || 10;
-    document.getElementById('cfgMaxW').value    = cfg.max_random_walks || 3;
-    document.getElementById('cfgTimeout').value = cfg.query_timeout_s || 20;
-    document.getElementById('cfgMaxS').value    = sm.max_streams || 50;
+    const c = lastSnapshot.coordinator.config;
+    document.getElementById('cfgMaxQ').value = c.max_concurrent_queries;
+    document.getElementById('cfgMaxW').value = c.max_random_walks;
+    document.getElementById('cfgTimeout').value = c.query_timeout_s;
   }
-  document.getElementById('configModal').classList.add('open');
+  document.getElementById('configModal').style.display = 'flex';
 }
-
-function closeConfig() {
-  document.getElementById('configModal').classList.remove('open');
-}
+function closeConfig() { document.getElementById('configModal').style.display = 'none'; }
 
 async function applyConfig() {
-  const body = {
-    max_concurrent_queries: parseInt(document.getElementById('cfgMaxQ').value),
-    max_random_walks:        parseInt(document.getElementById('cfgMaxW').value),
-    query_timeout:           parseFloat(document.getElementById('cfgTimeout').value),
-    max_streams:             parseInt(document.getElementById('cfgMaxS').value),
-  };
-  try {
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body)
-    });
-    log(`Config updated: cap=${body.max_concurrent_queries} walks=${body.max_random_walks} timeout=${body.query_timeout}s streams=${body.max_streams}`, 'ok');
-    closeConfig();
-  } catch(e) { log('Config error: ' + e.message, 'error'); }
+  await fetch('/api/config', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      max_concurrent_queries: parseInt(document.getElementById('cfgMaxQ').value),
+      max_random_walks: parseInt(document.getElementById('cfgMaxW').value),
+      query_timeout: parseFloat(document.getElementById('cfgTimeout').value)
+    })
+  });
+  closeConfig();
 }
 
-// ─────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
-}
+function setText(id, t) { const el = document.getElementById(id); if (el) el.textContent = t; }
 
-const MAX_LOG = 80;
-let logLines = [];
-function log(msg, level = 'info') {
-  const ts = new Date().toLocaleTimeString('en-GB', {hour12: false});
-  logLines.unshift({ ts, msg, level });
-  if (logLines.length > MAX_LOG) logLines.pop();
-  const area = document.getElementById('logArea');
-  area.innerHTML = logLines.map(l =>
-    `<div class="log-line ${l.level}">[${l.ts}] ${l.msg}</div>`
-  ).join('');
-}
-
-// Clock
-setInterval(() => {
-  document.getElementById('clockEl').textContent =
-    new Date().toLocaleTimeString('en-GB', {hour12: false});
-}, 1000);
-
-// ─────────────────────────────────────────────────
-// Real mode detection & panels
-// ─────────────────────────────────────────────────
-let isRealMode = false;
-
-function updateModeUI(snap) {
-  const mode = snap.mode || (snap.network && snap.network.is_real_libp2p ? 'real' : 'simulated');
-  const wasReal = isRealMode;
-  isRealMode = (mode === 'real');
-
-  if (isRealMode !== wasReal) {
-    setText('modeLabel', isRealMode ? 'REAL libp2p 0.6.0' : 'SIMULATED');
-    document.getElementById('dhtPanel').style.display = isRealMode ? '' : 'none';
-    document.getElementById('pubsubPanel').style.display = isRealMode ? '' : 'none';
-    document.getElementById('peerPanel').style.display = isRealMode ? '' : 'none';
-    document.getElementById('rcmgrRow').style.display = isRealMode ? '' : 'none';
-  }
-
-  if (isRealMode) {
-    const rcmgr = snap.resource_manager || {};
-    setText('rcConn', rcmgr.active_connections || rcmgr.total_connections || 0);
-    setText('rcStreams', rcmgr.active_streams || rcmgr.total_streams || 0);
-    setText('rcMemMB', rcmgr.memory_used_mb || 0);
-    setText('rcCB', rcmgr.circuit_breaker_open ? 'OPEN' : 'OK');
-
-    const ns = snap.network?.stats || {};
-    setText('nsDhtQ', ns.dht_queries || 0);
-    setText('nsPuts', ns.dht_puts || 0);
-    setText('nsGets', ns.dht_gets || 0);
-    setText('nsPubRx', ns.pubsub_received || 0);
-    setText('peerCount', snap.network?.connected_peers || 0);
-
-    const topics = snap.network?.subscribed_topics || [];
-    setText('psTopics', topics.length ? topics.join(', ') : 'none');
-  }
-}
-
-// ─────────────────────────────────────────────────
-// DHT Value Store (safe DOM methods)
-// ─────────────────────────────────────────────────
-function dhtLog(msg, level) {
-  level = level || 'info';
-  const el = document.getElementById('dhtLog');
-  const ts = new Date().toLocaleTimeString('en-GB', {hour12: false});
-  const line = document.createElement('div');
-  line.className = 'log-line ' + level;
-  line.textContent = '[' + ts + '] ' + msg;
-  el.insertBefore(line, el.firstChild);
-  while (el.children.length > 10) el.removeChild(el.lastChild);
-}
-
-async function dhtPut() {
-  const key = document.getElementById('dhtKey').value;
-  const val = document.getElementById('dhtVal').value;
-  if (!key || !val) { dhtLog('Key and value required', 'warn'); return; }
-  try {
-    const res = await fetch('/api/dht/put', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ key: key, value: val })
-    });
-    const data = await res.json();
-    dhtLog('PUT ' + key + ' -> ' + data.status, data.status === 'ok' ? 'ok' : 'error');
-  } catch(e) { dhtLog('PUT failed: ' + e.message, 'error'); }
-}
-
-async function dhtGet() {
-  const key = document.getElementById('dhtKey').value;
-  if (!key) { dhtLog('Key required', 'warn'); return; }
-  try {
-    const res = await fetch('/api/dht/get', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ key: key })
-    });
-    const data = await res.json();
-    if (data.found) {
-      dhtLog('GET ' + key + ' -> "' + data.value + '"', 'ok');
-      document.getElementById('dhtVal').value = data.value;
-    } else {
-      dhtLog('GET ' + key + ' -> not found', 'warn');
-    }
-  } catch(e) { dhtLog('GET failed: ' + e.message, 'error'); }
-}
-
-async function dhtProvide() {
-  const key = document.getElementById('dhtKey').value;
-  if (!key) { dhtLog('Key required', 'warn'); return; }
-  try {
-    const res = await fetch('/api/dht/provide', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ key: key })
-    });
-    const data = await res.json();
-    dhtLog('PROVIDE ' + key + ' -> ' + data.status, data.status === 'ok' ? 'ok' : 'error');
-  } catch(e) { dhtLog('PROVIDE failed: ' + e.message, 'error'); }
-}
-
-async function dhtFindProviders() {
-  const key = document.getElementById('dhtKey').value;
-  if (!key) { dhtLog('Key required', 'warn'); return; }
-  try {
-    const res = await fetch('/api/dht/providers', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ key: key, count: 20 })
-    });
-    const data = await res.json();
-    dhtLog('FIND_PROVIDERS ' + key + ' -> ' + data.count + ' found', data.count > 0 ? 'ok' : 'warn');
-  } catch(e) { dhtLog('FIND_PROVIDERS failed: ' + e.message, 'error'); }
-}
-
-// ─────────────────────────────────────────────────
-// PubSub
-// ─────────────────────────────────────────────────
-async function psSubscribe() {
-  const topic = document.getElementById('psTopic').value;
-  if (!topic) return;
-  try {
-    const res = await fetch('/api/pubsub/subscribe', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic: topic })
-    });
-    const data = await res.json();
-    log('PubSub SUB -> ' + topic + ' (' + data.status + ')', data.status === 'subscribed' ? 'ok' : 'error');
-  } catch(e) { log('PubSub subscribe error: ' + e.message, 'error'); }
-}
-
-async function psUnsubscribe() {
-  const topic = document.getElementById('psTopic').value;
-  if (!topic) return;
-  try {
-    const res = await fetch('/api/pubsub/unsubscribe', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic: topic })
-    });
-    const data = await res.json();
-    log('PubSub UNSUB -> ' + topic + ' (' + data.status + ')', 'ok');
-  } catch(e) { log('PubSub unsubscribe error: ' + e.message, 'error'); }
-}
-
-async function psPublish() {
-  const topic = document.getElementById('psTopic').value;
-  const msgData = document.getElementById('psMsg').value;
-  if (!topic || !msgData) return;
-  try {
-    const res = await fetch('/api/pubsub/publish', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ topic: topic, data: msgData })
-    });
-    const result = await res.json();
-    log('PubSub PUB -> ' + topic + ' (' + result.status + ')', result.status === 'published' ? 'ok' : 'error');
-  } catch(e) { log('PubSub publish error: ' + e.message, 'error'); }
-}
-
-// ─────────────────────────────────────────────────
-// Peer Connect
-// ─────────────────────────────────────────────────
-async function peerConnect() {
-  const addr = document.getElementById('peerAddr').value;
-  if (!addr) return;
-  try {
-    const res = await fetch('/api/peer/connect', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ multiaddr: addr })
-    });
-    const data = await res.json();
-    log('Peer CONNECT -> ' + data.status, data.status === 'connected' ? 'ok' : 'error');
-  } catch(e) { log('Peer connect error: ' + e.message, 'error'); }
-}
-
-// ─────────────────────────────────────────────────
-// Init
-// ─────────────────────────────────────────────────
-log('Dashboard initialising...', 'info');
-connect();
+init();
 </script>
 </body>
 </html>
