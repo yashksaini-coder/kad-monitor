@@ -195,7 +195,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: column;
     border: 1px solid var(--border-subtle);
   }
 
@@ -378,7 +378,8 @@
         <div class="panel-header"><span class="panel-title">DHT Latency</span></div>
         <div class="panel-main-stat"><span id="cLat">0</span><span class="panel-unit">ms</span></div>
         <div class="panel-sub-stats">
-          <span class="sub-stat-item">Avg Latency: <b id="cAvg">0</b>ms</span>
+          <span class="sub-stat-item">p95: <b id="cP95">0</b>ms</span>
+          <span class="sub-stat-item">p99: <b id="cP99">0</b>ms</span>
           <span class="sub-stat-item">Network: <b id="cScenario">NORMAL</b></span>
         </div>
         <div class="chart-container"><canvas id="durChart"></canvas></div>
@@ -477,6 +478,43 @@ function escapeHtml(s) {
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+const LOG_LIMIT = 200;
+const seenResults = new Set();
+let prevScenario = null, prevConfigJson = null, prevSaturated = false;
+
+function logEvent(msg, level = 'info') {
+  const area = document.getElementById('logArea');
+  const color = { info: 'var(--text-dim)', warn: 'var(--color-yellow)', error: 'var(--color-red)', ok: 'var(--color-green)' }[level];
+  const line = document.createElement('div');
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  line.innerHTML = `<span style="color:var(--border-strong)">${ts}</span> <span style="color:${color}">${escapeHtml(msg)}</span>`;
+  area.prepend(line);
+  while (area.childElementCount > LOG_LIMIT) area.lastElementChild.remove();
+}
+
+function deriveEvents(snap) {
+  const scen = snap.network?.scenario;
+  if (prevScenario && scen !== prevScenario) logEvent(`scenario → ${scen}`, 'warn');
+  prevScenario = scen;
+
+  const cfg = JSON.stringify(snap.coordinator?.config || {});
+  if (prevConfigJson && cfg !== prevConfigJson) logEvent('limits reconfigured', 'info');
+  prevConfigJson = cfg;
+
+  (snap.recent_results || []).slice(0, 10).forEach(r => {
+    if (seenResults.has(r.query_id)) return;
+    seenResults.add(r.query_id);
+    if (r.status === 'timeout') logEvent(`${r.query_id} TIMEOUT after ${Math.round(r.duration_ms)}ms`, 'error');
+    else if (r.status === 'failed') logEvent(`${r.query_id} failed (${r.peer_id})`, 'warn');
+  });
+  if (seenResults.size > 2000) seenResults.clear();
+
+  const util = snap.capacity_limiter?.utilisation_pct || 0;
+  if (util >= 90 && !prevSaturated) logEvent(`query pool saturated (${util}%) — back-pressure engaged`, 'error');
+  if (util < 90 && prevSaturated) logEvent('query pool below saturation', 'ok');
+  prevSaturated = util >= 90;
+}
+
 async function setScenario(s) {
   await fetch('/api/network/scenario', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario: s }) });
 }
@@ -555,12 +593,14 @@ function connectWS() {
     document.getElementById('connDot').style.background = 'var(--color-green)';
     document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(115, 191, 105, 0.5)';
     document.getElementById('connLabel').textContent = 'CONNECTED';
+    logEvent('websocket connected', 'ok');
   };
   ws.onmessage = (e) => handleSnapshot(JSON.parse(e.data));
   ws.onclose = () => {
     document.getElementById('connDot').style.background = 'var(--color-red)';
     document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(242, 73, 92, 0.5)';
     document.getElementById('connLabel').textContent = 'OFFLINE';
+    logEvent('websocket lost — reconnecting', 'error');
     setTimeout(connectWS, 2000);
   };
 }
@@ -576,6 +616,8 @@ function handleSnapshot(snap) {
   setText('cQPS', (rates.throughput_qps || 0).toFixed(1));
   setText('cLat', rates.avg_duration_ms || 0);
   setText('cAvg', rates.avg_duration_ms || 0);
+  setText('cP95', rates.p95_ms || 0);
+  setText('cP99', rates.p99_ms || 0);
   setText('cPeak', conc.peak || 0);
   setText('cActive', (conc.current || 0));
   setText('cAcq', conc.acquiring || 0);
@@ -614,6 +656,8 @@ function handleSnapshot(snap) {
     setText('rcConn', rc.active_connections || rc.total_connections || 0);
     setText('rcStreams', rc.active_streams || rc.total_streams || 0);
   }
+
+  deriveEvents(snap);
 }
 
 function updateGauge(id, data) {
