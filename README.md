@@ -14,6 +14,17 @@ exhausting streams, and the event log narrates each back-pressure engagement.*
 
 ---
 
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| [docs/SETUP.md](docs/SETUP.md) | Dev environment, running, testing, optional real-libp2p mode |
+| [docs/CLI.md](docs/CLI.md) | Every flag with defaults, plus recipes |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker Compose deployment, exposure/safety, observability, upgrades |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Ground rules, test expectations, commit/PR conventions |
+
+---
+
 ## Architecture Overview
 
 ```
