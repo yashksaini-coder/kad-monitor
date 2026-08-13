@@ -644,7 +644,8 @@ function handleSnapshot(snap) {
 
   renderResults(snap.recent_results || []);
   renderLiveQueries(snap.live_queries || []);
-  renderTopology(snap.nodes || []);
+  const lastResult = (snap.recent_results || [])[0] || null;
+  renderTopology(snap.nodes || [], lastResult, snap.network?.online_nodes ?? 0);
 
   const isReal = snap.mode === 'real' || snap.network?.is_real_libp2p;
   document.body.classList.toggle('mode-real', isReal);
@@ -675,9 +676,9 @@ function renderResults(res) {
   const body = document.getElementById('resultsBody');
   body.innerHTML = res.slice(0, 15).map(r => `
     <tr>
-      <td style="color:var(--color-blue); font-family:var(--font-mono); font-size:10px">${r.query_id}</td>
-      <td title="${r.peer_id_full}" style="color:var(--text-main)">${r.peer_id}</td>
-      <td><span class="badge ${r.status==='success'?'badge-success':r.status==='timeout'?'badge-warn':'badge-error'}">${r.status}</span></td>
+      <td style="color:var(--color-blue); font-family:var(--font-mono); font-size:10px">${escapeHtml(r.query_id)}</td>
+      <td title="${escapeHtml(r.peer_id_full)}" style="color:var(--text-main)">${escapeHtml(r.peer_id)}</td>
+      <td><span class="badge ${r.status==='success'?'badge-success':r.status==='timeout'?'badge-warn':'badge-error'}">${escapeHtml(r.status)}</span></td>
       <td style="font-family:var(--font-mono); text-align:right">${Math.round(r.duration_ms)}ms</td>
       <td style="color:var(--text-dim); text-align:center">${r.hops||0}</td>
     </tr>
@@ -692,49 +693,103 @@ function renderLiveQueries(qs) {
   }
   el.innerHTML = qs.map(q => `
     <div style="display:flex; justify-content:space-between; font-size:10px; margin-bottom:4px; padding:6px; background:rgba(50,116,217,0.08); border:1px solid rgba(50,116,217,0.2); border-radius:3px;">
-      <span style="color:var(--color-blue); font-weight:700">${q.query_id}</span>
-      <span style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; margin:0 8px;">${q.peer_id}</span>
-      <span style="color:var(--color-orange); font-weight:700">${q.status.toUpperCase()}</span>
+      <span style="color:var(--color-blue); font-weight:700">${escapeHtml(q.query_id)}</span>
+      <span style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; margin:0 8px;">${escapeHtml(q.peer_id)}</span>
+      <span style="color:var(--color-orange); font-weight:700">${escapeHtml(q.status.toUpperCase())}</span>
     </div>
   `).join('');
 }
 
-function renderTopology(nodes) {
-  const svg = document.getElementById('topology');
-  if (!svg) return;
-  const parent = svg.parentElement;
-  const W = parent.clientWidth, H = parent.clientHeight;
-  if (W === 0 || H === 0) return;
+const hashCache = new Map();  // peer_id -> BigInt of sha256(id)[:20]
+async function idBig(pid) {
+  if (hashCache.has(pid)) return hashCache.get(pid);
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pid));
+  const bytes = new Uint8Array(buf).slice(0, 20);
+  let v = 0n;
+  for (const b of bytes) v = (v << 8n) | BigInt(b);
+  hashCache.set(pid, v);
+  if (hashCache.size > 5000) hashCache.clear();
+  return v;
+}
 
-  svg.setAttribute('width', W); svg.setAttribute('height', H);
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.innerHTML = '';
-  
-  const cx = W/2, cy = H/2, r = Math.min(W, H) * 0.38;
-  const count = Math.min(nodes.length, 36);
-  
-  nodes.slice(0, count).forEach((n, i) => {
-    const a = (i / count) * Math.PI * 2 - (Math.PI / 2);
-    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', cx); line.setAttribute('y1', cy); line.setAttribute('x2', x); line.setAttribute('y2', y);
-    line.setAttribute('stroke', 'rgba(255,255,255,0.04)'); svg.appendChild(line);
-    
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', x); circle.setAttribute('cy', y); circle.setAttribute('r', 3.5);
-    circle.setAttribute('fill', n.online ? 'var(--color-green)' : 'var(--color-red)');
-    circle.setAttribute('opacity', n.online ? '0.9' : '0.4');
-    if (n.online) circle.setAttribute('style', 'filter: drop-shadow(0 0 3px var(--color-green));');
-    svg.appendChild(circle);
-  });
-  
-  const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  center.setAttribute('cx', cx); center.setAttribute('cy', cy); center.setAttribute('r', 7);
-  center.setAttribute('fill', 'var(--color-blue)'); 
-  center.setAttribute('style', 'filter: drop-shadow(0 0 6px var(--color-blue));');
-  svg.appendChild(center);
-  
-  setText('topoCount', `${nodes.filter(n=>n.online).length} Nodes Online`);
+let topoBusy = false;
+async function renderTopology(nodes, lastResult, onlineCount) {
+  if (topoBusy) return;           // skip tick if previous render still hashing
+  topoBusy = true;
+  try {
+    const svg = document.getElementById('topology');
+    if (!svg) return;
+    const parent = svg.parentElement;
+    const W = parent.clientWidth, H = parent.clientHeight;
+    if (W === 0 || H === 0) return;
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const target = lastResult?.peer_id_full || null;
+    const targetBig = target ? await idBig(target) : null;
+    const shown = nodes.slice(0, 36);
+    const dists = [];
+    for (const n of shown) {
+      const d = targetBig === null ? 1n : (await idBig(n.peer_id_full)) ^ targetBig;
+      dists.push(d);
+    }
+    const maxD = dists.reduce((a, b) => (b > a ? b : a), 1n);
+
+    const cx = W / 2, cy = H / 2, rMax = Math.min(W, H) * 0.42;
+    const pos = new Map();  // peer_id_full -> [x, y]
+    svg.innerHTML = '';
+    shown.forEach((n, i) => {
+      const a = (i / shown.length) * Math.PI * 2 - Math.PI / 2;
+      // radius ∝ XOR distance from query target (closer = nearer center)
+      const frac = targetBig === null ? 1 : Number((dists[i] * 1000n) / maxD) / 1000;
+      const r = rMax * (0.25 + 0.75 * frac);
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      pos.set(n.peer_id_full, [x, y]);
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', 3.5);
+      c.setAttribute('fill', n.online ? 'var(--color-green)' : 'var(--color-red)');
+      c.setAttribute('opacity', n.online ? '0.9' : '0.4');
+      svg.appendChild(c);
+    });
+
+    // Center = query target (or hub when no query yet)
+    const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    center.setAttribute('cx', cx); center.setAttribute('cy', cy); center.setAttribute('r', 7);
+    center.setAttribute('fill', 'var(--color-blue)');
+    svg.appendChild(center);
+
+    // Lookup path of the most recent query, hop by hop
+    const path = lastResult?.path || [];
+    let prev = null;
+    path.forEach((pid, hop) => {
+      const p = pos.get(pid);
+      if (!p) return;
+      if (prev) {
+        const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        l.setAttribute('x1', prev[0]); l.setAttribute('y1', prev[1]);
+        l.setAttribute('x2', p[0]); l.setAttribute('y2', p[1]);
+        l.setAttribute('stroke', 'var(--color-orange)'); l.setAttribute('stroke-width', '1.5');
+        svg.appendChild(l);
+      }
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      ring.setAttribute('cx', p[0]); ring.setAttribute('cy', p[1]); ring.setAttribute('r', 6);
+      ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', 'var(--color-orange)');
+      svg.appendChild(ring);
+      prev = p;
+    });
+    // last hop → center (target)
+    if (prev && lastResult?.found) {
+      const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l.setAttribute('x1', prev[0]); l.setAttribute('y1', prev[1]);
+      l.setAttribute('x2', cx); l.setAttribute('y2', cy);
+      l.setAttribute('stroke', 'var(--color-orange)'); l.setAttribute('stroke-width', '1.5');
+      svg.appendChild(l);
+    }
+
+    setText('topoCount', `${onlineCount} Nodes Online`);
+  } finally {
+    topoBusy = false;
+  }
 }
 
 async function fireQuery() {
