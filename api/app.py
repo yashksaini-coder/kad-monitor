@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -105,6 +105,8 @@ def create_app(
     libp2p_node=None,
     mode: str = "simulated",
 ) -> tuple:
+    started_at = time.time()
+
     app = FastAPI(
         title="libp2p DHT Monitor",
         description=(
@@ -140,6 +142,37 @@ def create_app(
     @app.get("/api/snapshot")
     async def get_snapshot():
         return _full_snapshot()
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok", "mode": mode,
+                "uptime_s": round(time.time() - started_at, 1)}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics():
+        snap = _full_snapshot()
+        coord = snap["coordinator"]
+        ql = snap["capacity_limiter"]
+        rwl = snap["random_walk_limiter"]
+        sm = snap["stream_manager"]
+        lines = ["# TYPE dht_queries_total counter"]
+        for status in ("success", "failed", "timeout", "cancelled"):
+            lines.append(f'dht_queries_total{{status="{status}"}} {coord["counters"][status]}')
+        lines += [
+            "# TYPE dht_query_limiter_borrowed gauge",
+            f"dht_query_limiter_borrowed {ql['borrowed']}",
+            f"dht_query_limiter_capacity {ql['total']}",
+            f"dht_walk_limiter_borrowed {rwl['borrowed']}",
+            f"dht_walk_limiter_capacity {rwl['total']}",
+            f"dht_stream_pool_open {sm['pool']['open']}",
+            f"dht_stream_pool_capacity {sm['config']['max_streams']}",
+            "# TYPE dht_throughput_qps gauge",
+            f"dht_throughput_qps {coord['rates']['throughput_qps']}",
+            f"dht_latency_p95_ms {coord['rates']['p95_ms']}",
+            f"dht_latency_p99_ms {coord['rates']['p99_ms']}",
+            f"dht_loadgen_achieved_qps {snap['load_gen'].get('achieved_qps', 0)}",
+        ]
+        return "\n".join(lines) + "\n"
 
     @app.get("/api/nodes")
     async def get_nodes():

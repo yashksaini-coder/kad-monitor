@@ -111,3 +111,26 @@ async def test_peer_chaos_remove_and_toggle():
 
         again = await client.delete(f"/api/network/peer/{victim}")
         assert again.status_code == 404
+
+
+@pytest.mark.trio
+async def test_healthz():
+    async with make_client() as client:
+        r = await client.get("/healthz")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["status"] == "ok"
+    assert d["mode"] == "simulated"
+    assert d["uptime_s"] >= 0
+
+
+@pytest.mark.trio
+async def test_metrics_exposition():
+    async with make_client() as client:
+        await client.post("/api/query", json={"mode": "known"})
+        r = await client.get("/metrics")
+    assert r.status_code == 200
+    text = r.text
+    assert 'dht_queries_total{status="success"}' in text
+    assert "dht_query_limiter_capacity 10" in text
+    assert "dht_stream_pool_capacity 20" in text
