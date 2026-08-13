@@ -35,7 +35,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import trio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -100,9 +99,8 @@ def create_app(
     network,
     stream_manager,
     load_gen_state: dict,
-    broadcast_send: trio.MemorySendChannel,
-    broadcast_recv: trio.MemoryReceiveChannel,
     libp2p_node=None,
+    mode: str = "simulated",
 ) -> tuple:
     app = FastAPI(
         title="libp2p DHT Monitor",
@@ -116,23 +114,15 @@ def create_app(
 
     connected_ws: list[WebSocket] = []
 
-    # Background task: fan out broadcast channel to all WebSocket clients
-    async def _ws_broadcaster():
-        async for snapshot in broadcast_recv:
-            dead: list[WebSocket] = []
-            for ws in list(connected_ws):
-                try:
-                    await ws.send_text(json.dumps(snapshot, default=str))
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                connected_ws.remove(ws)
-
-    @app.on_event("startup")
-    async def _start_broadcaster():
-        async with trio.open_nursery() as tg:
-            tg.start_soon(_ws_broadcaster)
-            tg.cancel_scope.cancel()
+    def _full_snapshot() -> dict:
+        return {
+            **coordinator.snapshot(),
+            **stream_manager.snapshot(),
+            **network.snapshot(),
+            "load_gen": dict(load_gen_state),
+            "mode": mode,
+            "ts": time.time(),
+        }
 
     # -----------------------------------------------------------------------
     # Core REST routes
@@ -140,12 +130,7 @@ def create_app(
 
     @app.get("/api/snapshot")
     async def get_snapshot():
-        return {
-            **coordinator.snapshot(),
-            **stream_manager.snapshot(),
-            **network.snapshot(),
-            "ts": time.time(),
-        }
+        return _full_snapshot()
 
     @app.get("/api/nodes")
     async def get_nodes():
@@ -326,12 +311,7 @@ def create_app(
         connected_ws.append(ws)
         logger.info("WebSocket client connected (%d total)", len(connected_ws))
         try:
-            snapshot = {
-                **coordinator.snapshot(),
-                **stream_manager.snapshot(),
-                **network.snapshot(),
-                "ts": time.time(),
-            }
+            snapshot = _full_snapshot()
             await ws.send_text(json.dumps(snapshot, default=str))
 
             while True:

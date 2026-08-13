@@ -165,6 +165,12 @@ async def main_simulated(args):
 
     broadcast_send, broadcast_recv = trio.open_memory_channel(max_buffer_size=50)
 
+    load_gen_state: dict = {
+        "active": False,
+        "qps": 2.0,
+        "mode": "mixed",
+    }
+
     async def _on_snapshot(snap: dict) -> None:
         merged = {
             **snap,
@@ -172,6 +178,7 @@ async def main_simulated(args):
             **network.snapshot(),
             "ts": time.time(),
             "mode": "simulated",
+            "load_gen": dict(load_gen_state),
         }
         try:
             broadcast_send.send_nowait(merged)
@@ -185,20 +192,13 @@ async def main_simulated(args):
         on_snapshot=_on_snapshot,
     )
 
-    load_gen_state: dict = {
-        "active": False,
-        "qps": 2.0,
-        "mode": "mixed",
-    }
-
     app, connected_ws = create_app(
         coordinator=coordinator,
         network=network,
         stream_manager=stream_manager,
         load_gen_state=load_gen_state,
-        broadcast_send=broadcast_send,
-        broadcast_recv=broadcast_recv,
         libp2p_node=None,
+        mode="simulated",
     )
 
     hc_config = hypercorn.config.Config()
@@ -233,6 +233,7 @@ async def main_simulated(args):
             stream_manager,
             broadcast_send,
             args.broadcast_interval,
+            {"mode": "simulated", "load_gen": load_gen_state},
         )
 
         nursery.start_soon(_ws_broadcaster)
@@ -294,6 +295,12 @@ async def main_real(args):
 
     broadcast_send, broadcast_recv = trio.open_memory_channel(max_buffer_size=50)
 
+    load_gen_state: dict = {
+        "active": False,
+        "qps": 2.0,
+        "mode": "mixed",
+    }
+
     async def _on_snapshot(snap: dict) -> None:
         merged = {
             **snap,
@@ -303,6 +310,7 @@ async def main_real(args):
             "mode": "real",
             "peer_id": node.peer_id,
             "listen_addrs": node.get_listen_addresses(),
+            "load_gen": dict(load_gen_state),
         }
         try:
             broadcast_send.send_nowait(merged)
@@ -316,20 +324,13 @@ async def main_real(args):
         on_snapshot=_on_snapshot,
     )
 
-    load_gen_state: dict = {
-        "active": False,
-        "qps": 2.0,
-        "mode": "mixed",
-    }
-
     app, connected_ws = create_app(
         coordinator=coordinator,
         network=network,
         stream_manager=stream_manager,
         load_gen_state=load_gen_state,
-        broadcast_send=broadcast_send,
-        broadcast_recv=broadcast_recv,
         libp2p_node=node,
+        mode="real",
     )
 
     http_config = hypercorn.config.Config()
@@ -370,6 +371,7 @@ async def main_real(args):
                 stream_manager,
                 broadcast_send,
                 args.broadcast_interval,
+                {"mode": "real", "load_gen": load_gen_state},
             )
 
             nursery.start_soon(_ws_broadcaster)

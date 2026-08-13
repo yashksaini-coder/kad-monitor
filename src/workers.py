@@ -148,6 +148,7 @@ async def metrics_broadcaster(
     stream_manager: "StreamManager",
     send_channel: trio.MemorySendChannel,
     interval_s: float = 0.5,
+    extra: dict | None = None,
     *,
     task_status=trio.TASK_STATUS_IGNORED,
 ) -> None:
@@ -165,6 +166,7 @@ async def metrics_broadcaster(
             **stream_manager.snapshot(),
             **network.snapshot(),
             "ts": time.time(),
+            **(extra or {}),
         }
         try:
             send_channel.send_nowait(snapshot)
