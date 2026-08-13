@@ -102,6 +102,7 @@
     position: relative;
     box-shadow: var(--card-shadow);
     min-width: 0;
+    min-height: 0;
   }
 
   .section-title { 
@@ -731,7 +732,6 @@ async function renderTopology(nodes, lastResult, onlineCount) {
     const parent = svg.parentElement;
     const W = parent.clientWidth, H = parent.clientHeight;
     if (W === 0 || H === 0) return;
-    svg.setAttribute('width', W); svg.setAttribute('height', H);
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
     const target = lastResult?.peer_id_full || null;
