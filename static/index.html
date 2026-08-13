@@ -303,6 +303,26 @@
     </div>
 
     <div class="card">
+      <div class="section-title">Network Scenario</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <button class="btn btn-outline scenario-btn" data-scenario="NORMAL" onclick="setScenario('NORMAL')">NORMAL</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="DEGRADED" onclick="setScenario('DEGRADED')">DEGRADED</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="STRESSED" onclick="setScenario('STRESSED')">STRESSED</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="SATURATED" onclick="setScenario('SATURATED')">SATURATED</button>
+      </div>
+      <div style="font-size:9px; color:var(--text-dim); margin-top:8px;">Switching rebuilds the simulated network (new peer IDs).</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Peer Chaos</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+        <button class="btn btn-outline" onclick="addPeer()">ADD</button>
+        <button class="btn btn-outline" onclick="removeRandomPeer()">KILL</button>
+        <button class="btn btn-outline" onclick="toggleRandomPeer()">FLAP</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-title">DHT Interaction</div>
       <div style="display: flex; gap: 8px; margin-bottom: 12px;">
         <button class="btn btn-outline active" onclick="setQueryMode('known',this)" style="flex:1">KNOWN</button>
@@ -316,6 +336,11 @@
 
     <div class="card">
       <div class="section-title">Traffic Generator</div>
+      <div style="font-size:10px; font-family:var(--font-mono); color:var(--text-dim); margin-bottom:12px; display:flex; justify-content:space-between;">
+        <span>req <b id="lgReq" style="color:#fff">0</b></span>
+        <span>fired <b id="lgFired" style="color:var(--color-yellow)">0</b></span>
+        <span>done <b id="lgDone" style="color:var(--color-green)">0</b></span>
+      </div>
       <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 6px; display: flex; justify-content: space-between;">
         <span>Throughput Rate:</span>
         <span style="color:var(--color-blue); font-weight: 700;"><span id="qpsVal">2</span> QPS</span>
@@ -415,6 +440,14 @@
       <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">QUERY TIMEOUT (SECONDS)</span>
       <input type="number" id="cfgTimeout">
     </div>
+    <div style="margin-bottom:16px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">MAX STREAMS</span>
+      <input type="number" id="cfgMaxS">
+    </div>
+    <div style="margin-bottom:24px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">STREAM TIMEOUT (SECONDS)</span>
+      <input type="number" id="cfgStreamT">
+    </div>
     <div style="display:flex; gap:12px;">
       <button class="btn btn-primary" style="flex:1; font-size: 12px;" onclick="applyConfig()">APPLY CHANGES</button>
       <button class="btn" style="flex:1; font-size: 12px;" onclick="closeConfig()">CANCEL</button>
@@ -433,9 +466,50 @@ let ws = null;
 function init() {
   setupCharts();
   connectWS();
+  syncLoadgen();
   setInterval(() => {
     document.getElementById('clockEl').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
   }, 1000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function setScenario(s) {
+  await fetch('/api/network/scenario', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario: s }) });
+}
+
+function randomNodeId() {
+  const nodes = (lastSnapshot && lastSnapshot.nodes) || [];
+  if (!nodes.length) return null;
+  return nodes[Math.floor(Math.random() * nodes.length)].peer_id_full;
+}
+
+async function addPeer() {
+  await fetch('/api/network/peer', { method: 'POST' });
+}
+async function removeRandomPeer() {
+  const id = randomNodeId();
+  if (id) await fetch(`/api/network/peer/${id}`, { method: 'DELETE' });
+}
+async function toggleRandomPeer() {
+  const id = randomNodeId();
+  if (id) await fetch(`/api/network/peer/${id}/toggle`, { method: 'POST' });
+}
+
+async function syncLoadgen() {
+  try {
+    const s = await (await fetch('/api/loadgen')).json();
+    loadActive = !!s.active;
+    document.getElementById('qpsRange').value = s.qps;
+    document.getElementById('qpsVal').textContent = s.qps;
+    document.getElementById('loadMode').value = s.mode;
+    const btn = document.getElementById('loadBtn');
+    btn.textContent = loadActive ? 'STOP LOAD GENERATOR' : 'START LOAD GENERATOR';
+    btn.classList.toggle('btn-primary', loadActive);
+  } catch (e) { /* server not up yet — WS reconnect will drive retry */ }
 }
 
 function setupCharts() {
@@ -506,6 +580,14 @@ function handleSnapshot(snap) {
   setText('cActive', (conc.current || 0));
   setText('cAcq', conc.acquiring || 0);
   setText('cScenario', snap.network?.scenario || 'NORMAL');
+
+  const scen = snap.network?.scenario;
+  document.querySelectorAll('.scenario-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.scenario === scen));
+  const lg = snap.load_gen || {};
+  setText('lgReq', lg.active ? (lg.qps ?? 0) : 0);
+  setText('lgFired', (lg.achieved_qps ?? 0).toFixed(1));
+  setText('lgDone', (rates.throughput_qps || 0).toFixed(1));
 
   updateGauge('ql', snap.capacity_limiter);
   updateGauge('rwl', snap.random_walk_limiter);
@@ -636,6 +718,9 @@ function openConfig() {
     document.getElementById('cfgMaxQ').value = c.max_concurrent_queries;
     document.getElementById('cfgMaxW').value = c.max_random_walks;
     document.getElementById('cfgTimeout').value = c.query_timeout_s;
+    const smc = (lastSnapshot.stream_manager || {}).config || {};
+    document.getElementById('cfgMaxS').value = smc.max_streams ?? 50;
+    document.getElementById('cfgStreamT').value = smc.stream_timeout_s ?? 60;
   }
   document.getElementById('configModal').style.display = 'flex';
 }
@@ -647,7 +732,9 @@ async function applyConfig() {
     body: JSON.stringify({
       max_concurrent_queries: parseInt(document.getElementById('cfgMaxQ').value),
       max_random_walks: parseInt(document.getElementById('cfgMaxW').value),
-      query_timeout: parseFloat(document.getElementById('cfgTimeout').value)
+      query_timeout: parseFloat(document.getElementById('cfgTimeout').value),
+      max_streams: parseInt(document.getElementById('cfgMaxS').value),
+      stream_timeout: parseFloat(document.getElementById('cfgStreamT').value)
     })
   });
   closeConfig();
