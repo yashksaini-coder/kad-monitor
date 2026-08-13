@@ -83,59 +83,63 @@ async def load_generator(
     Configurable load generator for stress testing.
 
     ``state`` is a shared dict with keys:
-      - ``active``: bool — whether the generator is running
-      - ``qps``:    float — target queries per second
-      - ``mode``:   str   — "known" | "unknown" | "mixed"
+      - ``active``:       bool  — whether the generator is running
+      - ``qps``:          float — target queries per second
+      - ``mode``:         str   — "known" | "unknown" | "mixed"
+      - ``achieved_qps``: float — (written here) rolling 5s rate actually fired
+
+    Queries are spawned into a long-lived nursery so they genuinely overlap —
+    a per-iteration nursery would WAIT for each query on exit and cap
+    concurrency at 1 (the original bug).
     """
     task_status.started(None)
     logger.info("Load generator started")
 
-    while True:
-        if not state.get("active", False):
-            await trio.sleep(0.5)
-            continue
+    window_s = 5.0
+    fired: list[float] = []  # trio.current_time() stamps of fired queries
 
-        qps = float(state.get("qps", 2.0))
-        mode = state.get("mode", "mixed")
-        interval = max(1.0 / qps, 0.05)
+    async with trio.open_nursery() as nursery:
+        while True:
+            if not state.get("active", False):
+                state["achieved_qps"] = 0.0
+                fired.clear()
+                await trio.sleep(0.5)
+                continue
 
-        # Pick target
-        if mode == "known" and network.peer_ids:
-            target = random.choice(network.peer_ids)
-        elif mode == "unknown":
-            target = hashlib.sha256(str(time.time()).encode()).hexdigest()[:40]
-        else:  # mixed
-            if random.random() < 0.5 and network.peer_ids:
+            qps = float(state.get("qps", 2.0))
+            mode = state.get("mode", "mixed")
+            interval = max(1.0 / qps, 0.05)
+
+            if mode == "known" and network.peer_ids:
                 target = random.choice(network.peer_ids)
-            else:
-                import hashlib
+            elif mode == "unknown":
                 target = hashlib.sha256(str(time.time()).encode()).hexdigest()[:40]
+            else:  # mixed
+                if random.random() < 0.5 and network.peer_ids:
+                    target = random.choice(network.peer_ids)
+                else:
+                    target = hashlib.sha256(str(time.time()).encode()).hexdigest()[:40]
 
-        async def _user_query_fn(pid: str):
-            async with stream_manager.open_stream(pid, "/libp2p/kad/1.0.0"):
-                return await network.query(pid)
+            async def _fire(pid: str) -> None:
+                async def _user_query_fn(p: str):
+                    async with stream_manager.open_stream(p, "/libp2p/kad/1.0.0"):
+                        return await network.query(p)
 
-        async def _fire():
-            try:
-                await coordinator.find_peer(
-                    target,
-                    _user_query_fn,
-                    priority=QueryPriority.USER,
-                )
-            except Exception as exc:
-                logger.debug("Load gen query error: %s", exc)
+                try:
+                    await coordinator.find_peer(
+                        pid, _user_query_fn, priority=QueryPriority.USER
+                    )
+                except Exception as exc:
+                    logger.debug("Load gen query error: %s", exc)
 
-        # Fire-and-forget: spawn the query but don't wait for it.
-        # The coordinator's CapacityLimiter will apply back-pressure.
-        trio.lowlevel.current_trio_token()  # ensure we're in trio context
-        async with trio.open_nursery() as fire_nursery:
-            fire_nursery.start_soon(_fire)
-            # Immediately yield — the query runs concurrently in nursery
-            # but nursery.aclose() is called at end of `async with` block,
-            # which waits for it. So we sleep the interval here first:
+            nursery.start_soon(_fire, target)
+
+            now = trio.current_time()
+            fired.append(now)
+            fired[:] = [t for t in fired if t >= now - window_s]
+            state["achieved_qps"] = round(len(fired) / window_s, 2)
+
             await trio.sleep(interval)
-            # nursery will cancel _fire if still running — that's fine,
-            # coordinator handles cancellation gracefully.
 
 
 async def metrics_broadcaster(
