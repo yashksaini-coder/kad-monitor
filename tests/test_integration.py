@@ -178,7 +178,8 @@ async def test_stream_manager_cap_respected():
 
 @pytest.mark.trio
 async def test_scenario_affects_latency(coordinator, stream_manager):
-    """Stressed scenario should have higher average durations."""
+    """Stressed scenario should have higher average durations for successful queries."""
+    import itertools
     import statistics
 
     normal_net = SimulatedDHTNetwork(node_count=15, scenario="NORMAL")
@@ -190,20 +191,35 @@ async def test_scenario_affects_latency(coordinator, stream_manager):
                 return await net.query(pid)
         return _fn
 
-    normal_results = []
-    for pid in normal_net.peer_ids[:3]:
-        r = await coordinator.find_peer(pid, await make_query_fn(normal_net))
-        normal_results.append(r.duration_ms)
+    async def success_durations(net, min_successes=3, max_attempts=30):
+        # STRESSED injects stream errors (OSError) before the latency sleep, so
+        # failed queries finish near-instantly and would skew the mean. Only
+        # SUCCESS results carry the scenario's real latency, so keep firing
+        # queries (bounded) until we have enough successes to compare fairly.
+        durations = []
+        peer_iter = itertools.cycle(net.peer_ids)
+        for _ in range(max_attempts):
+            if len(durations) >= min_successes:
+                break
+            pid = next(peer_iter)
+            r = await coordinator.find_peer(pid, await make_query_fn(net))
+            if r.status == QueryStatus.SUCCESS:
+                durations.append(r.duration_ms)
+        return durations
 
-    stressed_results = []
-    for pid in stressed_net.peer_ids[:3]:
-        r = await coordinator.find_peer(pid, await make_query_fn(stressed_net))
-        stressed_results.append(r.duration_ms)
+    normal_results = await success_durations(normal_net)
+    stressed_results = await success_durations(stressed_net)
+
+    assert len(normal_results) >= 3, "expected at least 3 successful NORMAL queries"
+    assert len(stressed_results) >= 3, "expected at least 3 successful STRESSED queries"
+
+    normal_success_mean = statistics.mean(normal_results)
+    stressed_success_mean = statistics.mean(stressed_results)
 
     # Stressed queries should generally take longer
-    assert statistics.mean(stressed_results) > statistics.mean(normal_results), (
+    assert stressed_success_mean > normal_success_mean, (
         f"STRESSED (base 400ms) must be slower than NORMAL (base 40ms): "
-        f"{statistics.mean(stressed_results):.0f}ms vs {statistics.mean(normal_results):.0f}ms"
+        f"{stressed_success_mean:.0f}ms vs {normal_success_mean:.0f}ms"
     )
 
 
