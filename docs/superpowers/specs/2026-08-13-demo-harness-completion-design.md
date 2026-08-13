@@ -80,7 +80,7 @@ p50/p95/p99 computed server-side in `coordinator.snapshot()` from the existing d
 
 ### 2.7 Lookup-path visualization (only feature with real backend change)
 - `SimulatedDHTNetwork.query` records the actual iterative-lookup path (ordered list of contacted peer IDs); returned alongside `(found, closest, hops)`; `QueryResult` gains `path`.
-- Topology view: position nodes by XOR distance from the most recent query's target (instead of the current decorative ring) and highlight that query's route hop by hop.
+- Topology view: keep stable ring angles but set each node's radius by XOR distance from the most recent query's target (closer = nearer center), and highlight that query's route hop by hop.
 - Fix the node-count label to use `network.online_nodes` (true count) instead of the truncated 30-node list.
 - Real mode: `path` is empty; topology falls back to current behavior.
 
@@ -115,7 +115,7 @@ Turns "watch the dashboard and squint" into evidence. Runs headless and in-proce
 - **Health endpoint:** `GET /healthz` returning `{"status": "ok"}` plus basic liveness facts (uptime, mode) — used by the Docker healthcheck.
 - **Prometheus metrics:** `GET /metrics` in text exposition format, hand-rendered from the existing snapshot counters/gauges (~15 series: query counters by status, limiter tokens/capacity, achieved QPS). No new dependency.
 - **Snapshot history:** `src/history.py` — SQLite (stdlib `sqlite3`) writer fed from the metrics_broadcaster tick, storing one row per tick (timestamp + JSON snapshot), bounded by age (default: keep 24h, pruned periodically). `GET /api/history?minutes=N` returns downsampled series; the dashboard hydrates its charts from it on page load so charts survive reloads.
-- **Docker:** multi-stage Dockerfile (slim Python base, non-root user), `docker-compose.yml` with port mapping, a volume for the SQLite file, and a healthcheck hitting `/healthz`.
+- **Docker:** single-stage Dockerfile (slim Python base, non-root user — deps are pure-Python wheels, a build stage adds nothing), `docker-compose.yml` with port mapping, a volume for the SQLite file, and a healthcheck hitting `/healthz`.
 
 ## Error handling
 
