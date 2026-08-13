@@ -1,8 +1,21 @@
 # libp2p DHT Monitor
 
 [![CI](https://github.com/yashksaini-coder/kad-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/yashksaini-coder/kad-monitor/actions/workflows/ci.yml)
+![Status: non-essential](https://img.shields.io/badge/status-non--essential-lightgrey)
+![Archived](https://img.shields.io/badge/repo-archived-inactive)
 
-**Production-grade test harness and real-time dashboard for validating the
+> ### ⚠️ Non-essential — archived, read-only, not maintained
+>
+> This was a **learning project**: built to explore py-libp2p and to demonstrate one
+> specific idea — dual-layer `trio.CapacityLimiter` back-pressure — with measurements
+> rather than assertions. It was never aimed at an audience or a use case.
+>
+> The code runs and the tests pass, but **no further work is planned**, issues and PRs
+> are closed, and nothing here should be treated as production software. Read
+> [Project Status & Honest Limitations](#project-status--honest-limitations) before
+> assuming it does anything for you.
+
+**A test harness and real-time dashboard for validating the
 `DHTQueryCoordinator` fix described in the Technical Design Doc:
 "Resolving DHT Resource Exhaustion".**
 
@@ -328,6 +341,9 @@ kad-monitor/
 ---
 
 ## Project Status & Honest Limitations
+
+**Status: non-essential. The repository is archived and read-only — no further work is
+planned.**
 
 **What this is:** a learning project — built to explore py-libp2p and to demonstrate one
 specific idea (dual-layer `trio.CapacityLimiter` back-pressure) with measurements rather
