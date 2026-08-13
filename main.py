@@ -138,6 +138,12 @@ def parse_args():
         "--max-libp2p-streams", type=int, default=1000, help="ResourceManager max streams"
     )
 
+    p.add_argument(
+        "--experiment",
+        metavar="CONFIG_JSON",
+        help="Run a headless A/B experiment from a JSON config and exit",
+    )
+
     return p.parse_args()
 
 
@@ -253,6 +259,15 @@ async def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.experiment:
+        from src.experiment import run_experiment, write_report
+
+        config = json.loads(Path(args.experiment).read_text())
+        result = trio.run(run_experiment, config)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        json_path, html_path = write_report(result, "reports", stamp)
+        print(f"Report: {json_path}\nReport: {html_path}")
+        sys.exit(0)
     try:
         trio.run(main, args)
     except KeyboardInterrupt:

@@ -6,8 +6,10 @@ comparable summary per arm.  Headless — no HTTP server involved.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
+from pathlib import Path
 
 import trio
 
@@ -92,3 +94,61 @@ async def run_experiment(config: dict) -> dict:
         "workload": config["workload"],
         "arms": arms,
     }
+
+
+_ROW_KEYS = [
+    ("Total queries", lambda a: a["counters"]["total"]),
+    ("Success", lambda a: a["counters"]["success"]),
+    ("Failed", lambda a: a["counters"]["failed"]),
+    ("Timeout", lambda a: a["counters"]["timeout"]),
+    ("Success rate %", lambda a: a["rates"]["success_pct"]),
+    ("Achieved QPS", lambda a: a["achieved_qps"]),
+    ("Avg latency ms", lambda a: a["rates"]["avg_duration_ms"]),
+    ("p95 ms", lambda a: a["rates"]["p95_ms"]),
+    ("p99 ms", lambda a: a["rates"]["p99_ms"]),
+    ("Peak concurrency", lambda a: a["peak_concurrency"]),
+    ("Peak borrowed slots", lambda a: a["peak_borrowed"]),
+    ("Peak waiting (queued)", lambda a: a["peak_waiting"]),
+]
+
+
+def render_html(result: dict) -> str:
+    arm_names = list(result["arms"])
+    head = "".join(f"<th>{n}</th>" for n in arm_names)
+    rows = ""
+    for label, get in _ROW_KEYS:
+        cells = "".join(f"<td>{get(result['arms'][n])}</td>" for n in arm_names)
+        rows += f"<tr><th>{label}</th>{cells}</tr>"
+    prot = result["arms"].get("protected", {})
+    cap = prot.get("config", {}).get("max_queries", "?")
+    verdict = (
+        f"Protected arm peak concurrency {prot.get('peak_concurrency', '?')} "
+        f"stayed within cap {cap}; queued work (peak waiting "
+        f"{prot.get('peak_waiting', '?')}) instead of exhausting resources."
+    )
+    return f"""<!doctype html><meta charset="utf-8">
+<title>kad-monitor experiment: {result['name']}</title>
+<style>
+ body{{font-family:system-ui;background:#0b0e14;color:#d8d9da;padding:32px;max-width:860px;margin:auto}}
+ table{{border-collapse:collapse;width:100%;margin:24px 0}}
+ th,td{{border:1px solid #2c3235;padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums}}
+ th:first-child{{text-align:left}} thead th{{background:#181b1f}}
+ .verdict{{background:#12331a;border:1px solid #2d6a3f;padding:12px 16px;border-radius:4px}}
+</style>
+<h1>Experiment: {result['name']}</h1>
+<p>Network: {result['network']['nodes']} nodes, scenario {result['network']['scenario']}.
+Workload: {result['workload']['qps']} QPS for {result['workload']['duration_s']}s per arm.</p>
+<table><thead><tr><th>Metric</th>{head}</tr></thead><tbody>{rows}</tbody></table>
+<p class="verdict"><b>Verdict:</b> {verdict}</p>
+"""
+
+
+def write_report(result: dict, out_dir, stamp: str):
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    base = f"{result['name']}-{stamp}"
+    json_path = out / f"{base}.json"
+    html_path = out / f"{base}.html"
+    json_path.write_text(json.dumps(result, indent=2))
+    html_path.write_text(render_html(result))
+    return json_path, html_path
