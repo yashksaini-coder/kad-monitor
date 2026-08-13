@@ -149,6 +149,7 @@ async def metrics_broadcaster(
     send_channel: trio.MemorySendChannel,
     interval_s: float = 0.5,
     extra: dict | None = None,
+    history=None,
     *,
     task_status=trio.TASK_STATUS_IGNORED,
 ) -> None:
@@ -175,3 +176,8 @@ async def metrics_broadcaster(
         except trio.ClosedResourceError:
             logger.info("Broadcast channel closed, stopping broadcaster")
             return
+        if history is not None:
+            try:
+                history.append(snapshot)
+            except Exception:
+                logger.exception("history append failed")

@@ -10,6 +10,7 @@ Endpoints
 ---------
 GET  /api/snapshot           -> full system state (one-shot)
 GET  /api/nodes              -> list of peers
+GET  /api/history            -> historical QPS/latency/concurrency snapshots
 POST /api/query              -> trigger a user find_peer
 POST /api/config             -> hot-reload coordinator / stream limits
 POST /api/network/scenario   -> switch load scenario
@@ -104,6 +105,7 @@ def create_app(
     load_gen_state: dict,
     libp2p_node=None,
     mode: str = "simulated",
+    history=None,
 ) -> tuple:
     started_at = time.time()
 
@@ -177,6 +179,12 @@ def create_app(
     @app.get("/api/nodes")
     async def get_nodes():
         return {"nodes": network.snapshot()["nodes"]}
+
+    @app.get("/api/history")
+    async def get_history(minutes: float = 30.0):
+        if history is None:
+            return {"points": []}
+        return {"points": history.query(minutes=min(minutes, 24 * 60))}
 
     @app.post("/api/query")
     async def trigger_query(req: QueryRequest):

@@ -34,6 +34,7 @@ import hypercorn.trio as hypercorn_trio
 
 from api.app import create_app
 from src.coordinator import DHTQueryCoordinator
+from src.history import SnapshotHistory
 from src.stream_manager import StreamManager
 from src.workers import load_generator, metrics_broadcaster, random_walk_worker
 
@@ -139,6 +140,12 @@ def parse_args():
     )
 
     p.add_argument(
+        "--history-db",
+        default="history.db",
+        help="SQLite snapshot history path ('' disables)",
+    )
+
+    p.add_argument(
         "--experiment",
         metavar="CONFIG_JSON",
         help="Run a headless A/B experiment from a JSON config and exit",
@@ -205,6 +212,8 @@ async def run_server(args):
         on_snapshot=_on_snapshot,
     )
 
+    history = SnapshotHistory(args.history_db) if args.history_db else None
+
     app, connected_ws = create_app(
         coordinator=coordinator,
         network=network,
@@ -212,6 +221,7 @@ async def run_server(args):
         load_gen_state=load_gen_state,
         libp2p_node=node,
         mode=args.mode,
+        history=history,
     )
 
     hc_config = hypercorn.config.Config()
@@ -238,7 +248,7 @@ async def run_server(args):
         async with trio.open_nursery() as nursery:
             await nursery.start(metrics_broadcaster, coordinator, network,
                                 stream_manager, broadcast_send,
-                                args.broadcast_interval, extra)
+                                args.broadcast_interval, extra, history)
             nursery.start_soon(_ws_broadcaster)
             if args.enable_random_walk:
                 await nursery.start(random_walk_worker, coordinator, network,

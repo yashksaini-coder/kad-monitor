@@ -464,6 +464,17 @@ let ws = null;
 
 function init() {
   setupCharts();
+  fetch('/api/history?minutes=1')
+    .then(r => r.json())
+    .then(d => {
+      const pts = (d.points || []).slice(-MAX_HISTORY);
+      pts.forEach(p => {
+        updateChart('qps', p.qps || 0);
+        updateChart('dur', p.avg_ms || 0);
+        updateChart('conc', p.concurrency || 0);
+      });
+    })
+    .catch(() => {});
   connectWS();
   syncLoadgen();
   setInterval(() => {
