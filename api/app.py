@@ -13,6 +13,8 @@ GET  /api/nodes              -> list of peers
 POST /api/query              -> trigger a user find_peer
 POST /api/config             -> hot-reload coordinator / stream limits
 POST /api/network/scenario   -> switch load scenario
+DELETE /api/network/peer/{id} -> remove a peer (simulated mode)
+POST /api/network/peer/{id}/toggle -> toggle peer online/offline (simulated mode)
 POST /api/loadgen            -> start / stop the load generator
 POST /api/dht/put            -> DHT put_value (real mode)
 POST /api/dht/get            -> DHT get_value (real mode)
@@ -196,6 +198,23 @@ def create_app(
             return {"status": "ok", "message": "Peer management handled by real network"}
         except Exception as e:
             raise HTTPException(400, str(e))
+
+    @app.delete("/api/network/peer/{peer_id}")
+    async def remove_peer(peer_id: str):
+        if libp2p_node is not None:
+            raise HTTPException(400, "Peer removal is simulated-mode only")
+        if network.remove_peer(peer_id):
+            return {"status": "removed", "peer_id": peer_id}
+        raise HTTPException(404, f"Unknown peer: {peer_id}")
+
+    @app.post("/api/network/peer/{peer_id}/toggle")
+    async def toggle_peer(peer_id: str):
+        if libp2p_node is not None:
+            raise HTTPException(400, "Peer toggle is simulated-mode only")
+        online = network.toggle_peer_online(peer_id)
+        if online is None:
+            raise HTTPException(404, f"Unknown peer: {peer_id}")
+        return {"status": "ok", "peer_id": peer_id, "online": online}
 
     # -----------------------------------------------------------------------
     # DHT Value Store (real mode only)

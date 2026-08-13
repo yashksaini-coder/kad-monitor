@@ -93,3 +93,21 @@ async def test_real_mode_endpoints_rejected_in_simulated():
     async with make_client() as client:
         r = await client.post("/api/dht/put", json={"key": "/k", "value": "v"})
     assert r.status_code == 400
+
+
+@pytest.mark.trio
+async def test_peer_chaos_remove_and_toggle():
+    async with make_client() as client:
+        nodes = (await client.get("/api/nodes")).json()["nodes"]
+        victim = nodes[0]["peer_id_full"]
+
+        t = await client.post(f"/api/network/peer/{victim}/toggle")
+        assert t.status_code == 200
+        assert t.json()["online"] in (True, False)
+
+        r = await client.delete(f"/api/network/peer/{victim}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "removed"
+
+        again = await client.delete(f"/api/network/peer/{victim}")
+        assert again.status_code == 404
