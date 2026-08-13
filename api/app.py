@@ -39,6 +39,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.coordinator import QueryPriority
@@ -112,6 +113,12 @@ def create_app(
             "ResourceManager."
         ),
         version="2.0.0",
+    )
+
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).parent.parent / "static"),
+        name="static",
     )
 
     connected_ws: list[WebSocket] = []
