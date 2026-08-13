@@ -279,3 +279,18 @@ async def test_query_records_lookup_path():
     assert len(result.path) == result.hops
     assert all(p in network.peer_ids for p in result.path)
     assert result.to_dict()["path"] == result.path
+
+
+# ---------------------------------------------------------------------------
+# Scenario switching
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.trio
+async def test_set_scenario_rebuilds_not_accumulates():
+    net = SimulatedDHTNetwork(node_count=30, scenario="NORMAL")
+    assert net.snapshot()["network"]["total_nodes"] == 30
+    net.set_scenario("STRESSED")
+    assert net.snapshot()["network"]["total_nodes"] == 30
+    net.set_scenario("NORMAL")
+    assert net.snapshot()["network"]["total_nodes"] == 30

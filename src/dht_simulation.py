@@ -155,6 +155,7 @@ class SimulatedDHTNetwork:
 
     def _build_network(self) -> None:
         logger.info("Building simulated DHT network with %d nodes…", self._node_count)
+        self._nodes = {}
         peer_ids = [_random_peer_id() for _ in range(self._node_count)]
 
         offline_count = int(self._node_count * self._scenario["offline_ratio"])
