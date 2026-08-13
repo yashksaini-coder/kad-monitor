@@ -66,6 +66,40 @@ async def test_config_hot_reload():
 
 
 @pytest.mark.trio
+async def test_config_rejects_non_positive_max_concurrent_queries():
+    async with make_client() as client:
+        r = await client.post("/api/config", json={"max_concurrent_queries": 0})
+    assert r.status_code == 422
+
+
+@pytest.mark.trio
+async def test_config_rejects_negative_query_timeout():
+    async with make_client() as client:
+        r = await client.post("/api/config", json={"query_timeout": -1.0})
+    assert r.status_code == 422
+
+
+@pytest.mark.trio
+async def test_config_rejects_walks_exceeding_queries():
+    async with make_client() as client:
+        r = await client.post(
+            "/api/config",
+            json={"max_random_walks": 20, "max_concurrent_queries": 10},
+        )
+    assert r.status_code == 400
+
+
+@pytest.mark.trio
+async def test_config_accepts_valid_update():
+    async with make_client() as client:
+        r = await client.post(
+            "/api/config",
+            json={"max_concurrent_queries": 12, "max_random_walks": 4},
+        )
+    assert r.status_code == 200
+
+
+@pytest.mark.trio
 async def test_loadgen_roundtrip():
     async with make_client() as client:
         r = await client.post(

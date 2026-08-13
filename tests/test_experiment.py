@@ -45,4 +45,4 @@ async def test_report_files(tmp_path, autojump_clock):
     assert set(loaded["arms"]) == {"unprotected", "protected"}
     html = html_path.read_text()
     assert "unprotected" in html and "protected" in html
-    assert "<html" not in html[:20] or True  # self-contained fragment or full doc — both fine
+    assert html.startswith("<!doctype html>")

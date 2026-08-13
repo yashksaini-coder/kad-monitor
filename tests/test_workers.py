@@ -8,6 +8,14 @@ from src.stream_manager import StreamManager
 from src.workers import load_generator, metrics_broadcaster
 
 
+class FakeHistory:
+    def __init__(self):
+        self.appended = []
+
+    def append(self, snapshot):
+        self.appended.append(snapshot)
+
+
 class SlowFakeNetwork:
     """Every query takes 1 virtual second; records peak concurrency."""
 
@@ -64,3 +72,32 @@ async def test_load_generator_idle_reports_zero_qps(autojump_clock):
 
     assert state["achieved_qps"] == 0.0
     assert network.peak == 0
+
+
+@pytest.mark.trio
+async def test_metrics_broadcaster_ticks(autojump_clock):
+    network = SlowFakeNetwork()
+    coordinator = DHTQueryCoordinator(
+        max_concurrent_queries=50, max_random_walks=3, query_timeout=30.0
+    )
+    sm = StreamManager(max_streams=100)
+    fake_history = FakeHistory()
+    send_channel, receive_channel = trio.open_memory_channel(10)
+
+    async with trio.open_nursery() as nursery:
+        await nursery.start(
+            metrics_broadcaster,
+            coordinator,
+            network,
+            sm,
+            send_channel,
+            0.5,
+            {"mode": "simulated", "load_gen": {"active": False}},
+            fake_history,
+        )
+        frame = await receive_channel.receive()
+        nursery.cancel_scope.cancel()
+
+    for key in ("coordinator", "network", "mode", "load_gen", "ts"):
+        assert key in frame, f"broadcast frame missing {key}"
+    assert len(fake_history.appended) >= 1
