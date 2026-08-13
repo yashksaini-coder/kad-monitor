@@ -324,3 +324,52 @@ kad-monitor/
 - **Peer Chaos**: Add / kill / revive individual peers to watch the network and topology react
 - **System Config**: Modal to hot-reload `max_queries`, `max_walks`, `query_timeout`, `max_streams`, `stream_timeout` (5 fields)
 </content>
+
+---
+
+## Project Status & Honest Limitations
+
+**What this is:** a learning project — built to explore py-libp2p and to demonstrate one
+specific idea (dual-layer `trio.CapacityLimiter` back-pressure) with measurements rather
+than assertions. It is a lab and a piece of evidence, not a product.
+
+**What it is not:** a general-purpose DHT monitor, a load-testing tool for your own
+services, or a teaching instrument. Anyone arriving cold should expect a demo aimed at a
+specific technical claim, not a tool aimed at their problem.
+
+### Known limitations
+
+- **It starts working before you ask it to.** The random-walk worker fires a background
+  DHT lookup every 4s from boot, so the dashboard opens mid-flight rather than idle.
+  There is no "press start" state. (`--no-enable-random-walk` disables it.)
+- **The dashboard assumes you already know the domain.** Kademlia terms (`FIND_PEER`,
+  XOR distance, hops), `trio.CapacityLimiter` semantics, and the Layer A/B/C nesting are
+  never explained on screen. There is essentially no in-UI help text.
+- **Scenarios are fixed presets.** You can select NORMAL / DEGRADED / STRESSED /
+  SATURATED, but the parameters behind them (latency, jitter, offline ratio, stream-error
+  rate, unknown-peer rate) are hardcoded in `ScenarioConfig` and cannot be tuned without
+  editing `src/dht_simulation.py`. Same for k-bucket size, max hops, and lookup fan-out.
+- **The core is more general than the framing.** `DHTQueryCoordinator.find_peer` accepts
+  any `async (id) -> (found, list, hops[, path])` callable and never inspects the result —
+  the DHT specificity lives in four nearly identical three-line closures. The limiter
+  engine would gate any async workload; only the topology view and results table are
+  genuinely DHT-shaped.
+- **Real py-libp2p mode is under-verified.** Hop counts are approximated, the pubsub
+  receive path is not surfaced, `StreamManager` counts synthetic slots rather than real
+  libp2p streams, and `libp2p==0.6.0` will not install on Python 3.14.
+
+### Parked roadmap (non-essential)
+
+Recorded for completeness; none of it is planned work.
+
+1. **Cold open** — idle first paint, opt-in traffic, and a guided
+   "run without limits → run with limits → compare" narrative driven by the existing
+   `/api/config` and `/api/loadgen` endpoints.
+2. **Self-explaining UI** — in-panel explanations of the limiter layers and metrics.
+3. **Editable scenarios** — expose the `ScenarioConfig` parameters through the API and
+   dashboard so network conditions become tunable instead of a fixed menu.
+4. **Concurrency sweep** — `run_experiment` already accepts arbitrary named arms, so a
+   sweep across `max_queries` is a config file plus a chart; it would show throughput
+   flat while p95 and queue depth climb, which is Little's Law in one picture.
+5. **Generic harness** — decouple from the DHT so the limiter engine and experiment
+   runner can be pointed at any async workload.
