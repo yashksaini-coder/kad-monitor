@@ -1,8 +1,16 @@
 # libp2p DHT Monitor
 
+[![CI](https://github.com/yashksaini-coder/kad-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/yashksaini-coder/kad-monitor/actions/workflows/ci.yml)
+
 **Production-grade test harness and real-time dashboard for validating the
 `DHTQueryCoordinator` fix described in the Technical Design Doc:
 "Resolving DHT Resource Exhaustion".**
+
+![Dashboard under STRESSED scenario at 12 QPS — query pool saturated, back-pressure engaged](docs/images/dashboard.jpg)
+
+*Live dashboard under a STRESSED scenario at 12 QPS: the query pool is
+saturated (Layer A gauge red at 10/10), excess queries queue instead of
+exhausting streams, and the event log narrates each back-pressure engagement.*
 
 ---
 
@@ -172,12 +180,21 @@ and writes both a JSON and an HTML report to `reports/`. `baseline.json` pits
 an `unprotected` arm (caps effectively unlimited) against a `protected` arm
 (the real Layer A/B/C caps: 10 queries / 3 walks / 50 streams) against a
 STRESSED, 60-node network at 30 QPS for 20s each (~45s total run time). The
-unprotected arm's concurrency chases the offered load — peaking around 24
-simultaneous queries against the network — while the protected arm holds
-steady at its 10-query ceiling and queues the rest, trading a longer tail
-for a coordinator that never falls over. That's the whole point of the
-dual-layer limiter: bounded concurrency instead of unbounded and eventually
-broken.
+unprotected arm's concurrency chases the offered load while the protected
+arm holds steady at its 10-query ceiling and queues the rest, trading a
+longer tail for a coordinator that never falls over.
+
+A representative full run (both arms, identical 30 QPS workload):
+
+| Metric | unprotected | protected |
+|---|---|---|
+| Peak concurrent queries | **32** | **10** (the cap) |
+| Peak queued (waiting) | 1 | 312 |
+| Achieved QPS | 29.1 | 29.0 |
+
+Same throughput, bounded concurrency: that's the whole point of the
+dual-layer limiter — the excess load waits in line instead of exhausting
+streams and wedging the node.
 
 ---
 
