@@ -17,6 +17,9 @@ Run with:
 from __future__ import annotations
 
 import pytest
+
+pytest.importorskip("libp2p", reason="real-mode tests require the optional libp2p dependency")
+
 import trio
 
 from src.libp2p_node import Libp2pNode, Libp2pNodeConfig, RealDHTNetwork

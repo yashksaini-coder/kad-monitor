@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>libp2p // DHT Monitor</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/chart.umd.min.js"></script>
 <style>
   :root {
     --bg-base:     #0b0e14;
@@ -27,8 +25,8 @@
     --color-red:    #f2495c;
     --color-purple: #8e5bd6;
 
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
     
     --card-shadow: 0 4px 6px rgba(0,0,0,0.3);
     --transition-fast: 0.15s ease;
@@ -104,6 +102,7 @@
     position: relative;
     box-shadow: var(--card-shadow);
     min-width: 0;
+    min-height: 0;
   }
 
   .section-title { 
@@ -195,7 +194,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: column;
     border: 1px solid var(--border-subtle);
   }
 
@@ -303,6 +302,26 @@
     </div>
 
     <div class="card">
+      <div class="section-title">Network Scenario</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <button class="btn btn-outline scenario-btn" data-scenario="NORMAL" onclick="setScenario('NORMAL')">NORMAL</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="DEGRADED" onclick="setScenario('DEGRADED')">DEGRADED</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="STRESSED" onclick="setScenario('STRESSED')">STRESSED</button>
+        <button class="btn btn-outline scenario-btn" data-scenario="SATURATED" onclick="setScenario('SATURATED')">SATURATED</button>
+      </div>
+      <div style="font-size:9px; color:var(--text-dim); margin-top:8px;">Switching rebuilds the simulated network (new peer IDs).</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Peer Chaos</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+        <button class="btn btn-outline" onclick="addPeer()">ADD</button>
+        <button class="btn btn-outline" onclick="removeRandomPeer()">KILL</button>
+        <button class="btn btn-outline" onclick="toggleRandomPeer()">FLAP</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-title">DHT Interaction</div>
       <div style="display: flex; gap: 8px; margin-bottom: 12px;">
         <button class="btn btn-outline active" onclick="setQueryMode('known',this)" style="flex:1">KNOWN</button>
@@ -316,6 +335,11 @@
 
     <div class="card">
       <div class="section-title">Traffic Generator</div>
+      <div style="font-size:10px; font-family:var(--font-mono); color:var(--text-dim); margin-bottom:12px; display:flex; justify-content:space-between;">
+        <span>req <b id="lgReq" style="color:#fff">0</b></span>
+        <span>fired <b id="lgFired" style="color:var(--color-yellow)">0</b></span>
+        <span>done <b id="lgDone" style="color:var(--color-green)">0</b></span>
+      </div>
       <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 6px; display: flex; justify-content: space-between;">
         <span>Throughput Rate:</span>
         <span style="color:var(--color-blue); font-weight: 700;"><span id="qpsVal">2</span> QPS</span>
@@ -353,7 +377,8 @@
         <div class="panel-header"><span class="panel-title">DHT Latency</span></div>
         <div class="panel-main-stat"><span id="cLat">0</span><span class="panel-unit">ms</span></div>
         <div class="panel-sub-stats">
-          <span class="sub-stat-item">Avg Latency: <b id="cAvg">0</b>ms</span>
+          <span class="sub-stat-item">p95: <b id="cP95">0</b>ms</span>
+          <span class="sub-stat-item">p99: <b id="cP99">0</b>ms</span>
           <span class="sub-stat-item">Network: <b id="cScenario">NORMAL</b></span>
         </div>
         <div class="chart-container"><canvas id="durChart"></canvas></div>
@@ -415,6 +440,14 @@
       <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">QUERY TIMEOUT (SECONDS)</span>
       <input type="number" id="cfgTimeout">
     </div>
+    <div style="margin-bottom:16px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">MAX STREAMS</span>
+      <input type="number" id="cfgMaxS">
+    </div>
+    <div style="margin-bottom:24px;">
+      <span style="font-size:10px; color:var(--text-dim); display:block; margin-bottom:6px; font-weight:700">STREAM TIMEOUT (SECONDS)</span>
+      <input type="number" id="cfgStreamT">
+    </div>
     <div style="display:flex; gap:12px;">
       <button class="btn btn-primary" style="flex:1; font-size: 12px;" onclick="applyConfig()">APPLY CHANGES</button>
       <button class="btn" style="flex:1; font-size: 12px;" onclick="closeConfig()">CANCEL</button>
@@ -432,10 +465,99 @@ let ws = null;
 
 function init() {
   setupCharts();
+  fetch('/api/history?minutes=1')
+    .then(r => r.json())
+    .then(d => {
+      const pts = (d.points || []).slice(-MAX_HISTORY);
+      pts.forEach(p => {
+        updateChart('qps', p.qps || 0);
+        updateChart('dur', p.avg_ms || 0);
+        updateChart('conc', p.concurrency || 0);
+      });
+    })
+    .catch(() => {});
   connectWS();
+  syncLoadgen();
   setInterval(() => {
     document.getElementById('clockEl').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
   }, 1000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const LOG_LIMIT = 200;
+const seenResults = new Set();
+let prevScenario = null, prevConfigJson = null, prevSaturated = false;
+
+function logEvent(msg, level = 'info') {
+  const area = document.getElementById('logArea');
+  const color = { info: 'var(--text-dim)', warn: 'var(--color-yellow)', error: 'var(--color-red)', ok: 'var(--color-green)' }[level];
+  const line = document.createElement('div');
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  line.innerHTML = `<span style="color:var(--border-strong)">${ts}</span> <span style="color:${color}">${escapeHtml(msg)}</span>`;
+  area.prepend(line);
+  while (area.childElementCount > LOG_LIMIT) area.lastElementChild.remove();
+}
+
+function deriveEvents(snap) {
+  const scen = snap.network?.scenario;
+  if (prevScenario && scen !== prevScenario) logEvent(`scenario → ${scen}`, 'warn');
+  prevScenario = scen;
+
+  const cfg = JSON.stringify(snap.coordinator?.config || {});
+  if (prevConfigJson && cfg !== prevConfigJson) logEvent('limits reconfigured', 'info');
+  prevConfigJson = cfg;
+
+  (snap.recent_results || []).slice(0, 10).forEach(r => {
+    if (seenResults.has(r.query_id)) return;
+    seenResults.add(r.query_id);
+    if (r.status === 'timeout') logEvent(`${r.query_id} TIMEOUT after ${Math.round(r.duration_ms)}ms`, 'error');
+    else if (r.status === 'failed') logEvent(`${r.query_id} failed (${r.peer_id})`, 'warn');
+  });
+  if (seenResults.size > 2000) seenResults.clear();
+
+  const util = snap.capacity_limiter?.utilisation_pct || 0;
+  if (util >= 90 && !prevSaturated) logEvent(`query pool saturated (${util}%) — back-pressure engaged`, 'error');
+  if (util < 90 && prevSaturated) logEvent('query pool below saturation', 'ok');
+  prevSaturated = util >= 90;
+}
+
+async function setScenario(s) {
+  await fetch('/api/network/scenario', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario: s }) });
+}
+
+function randomNodeId() {
+  const nodes = (lastSnapshot && lastSnapshot.nodes) || [];
+  if (!nodes.length) return null;
+  return nodes[Math.floor(Math.random() * nodes.length)].peer_id_full;
+}
+
+async function addPeer() {
+  await fetch('/api/network/peer', { method: 'POST' });
+}
+async function removeRandomPeer() {
+  const id = randomNodeId();
+  if (id) await fetch(`/api/network/peer/${id}`, { method: 'DELETE' });
+}
+async function toggleRandomPeer() {
+  const id = randomNodeId();
+  if (id) await fetch(`/api/network/peer/${id}/toggle`, { method: 'POST' });
+}
+
+async function syncLoadgen() {
+  try {
+    const s = await (await fetch('/api/loadgen')).json();
+    loadActive = !!s.active;
+    document.getElementById('qpsRange').value = s.qps;
+    document.getElementById('qpsVal').textContent = s.qps;
+    document.getElementById('loadMode').value = s.mode;
+    const btn = document.getElementById('loadBtn');
+    btn.textContent = loadActive ? 'STOP LOAD GENERATOR' : 'START LOAD GENERATOR';
+    btn.classList.toggle('btn-primary', loadActive);
+  } catch (e) { /* server not up yet — WS reconnect will drive retry */ }
 }
 
 function setupCharts() {
@@ -481,12 +603,14 @@ function connectWS() {
     document.getElementById('connDot').style.background = 'var(--color-green)';
     document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(115, 191, 105, 0.5)';
     document.getElementById('connLabel').textContent = 'CONNECTED';
+    logEvent('websocket connected', 'ok');
   };
   ws.onmessage = (e) => handleSnapshot(JSON.parse(e.data));
   ws.onclose = () => {
     document.getElementById('connDot').style.background = 'var(--color-red)';
     document.getElementById('connDot').style.boxShadow = '0 0 10px rgba(242, 73, 92, 0.5)';
     document.getElementById('connLabel').textContent = 'OFFLINE';
+    logEvent('websocket lost — reconnecting', 'error');
     setTimeout(connectWS, 2000);
   };
 }
@@ -502,10 +626,20 @@ function handleSnapshot(snap) {
   setText('cQPS', (rates.throughput_qps || 0).toFixed(1));
   setText('cLat', rates.avg_duration_ms || 0);
   setText('cAvg', rates.avg_duration_ms || 0);
+  setText('cP95', rates.p95_ms || 0);
+  setText('cP99', rates.p99_ms || 0);
   setText('cPeak', conc.peak || 0);
   setText('cActive', (conc.current || 0));
   setText('cAcq', conc.acquiring || 0);
   setText('cScenario', snap.network?.scenario || 'NORMAL');
+
+  const scen = snap.network?.scenario;
+  document.querySelectorAll('.scenario-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.scenario === scen));
+  const lg = snap.load_gen || {};
+  setText('lgReq', lg.active ? (lg.qps ?? 0) : 0);
+  setText('lgFired', (lg.achieved_qps ?? 0).toFixed(1));
+  setText('lgDone', (rates.throughput_qps || 0).toFixed(1));
 
   updateGauge('ql', snap.capacity_limiter);
   updateGauge('rwl', snap.random_walk_limiter);
@@ -520,7 +654,8 @@ function handleSnapshot(snap) {
 
   renderResults(snap.recent_results || []);
   renderLiveQueries(snap.live_queries || []);
-  renderTopology(snap.nodes || []);
+  const lastResult = (snap.recent_results || [])[0] || null;
+  renderTopology(snap.nodes || [], lastResult, snap.network?.online_nodes ?? 0);
 
   const isReal = snap.mode === 'real' || snap.network?.is_real_libp2p;
   document.body.classList.toggle('mode-real', isReal);
@@ -532,6 +667,8 @@ function handleSnapshot(snap) {
     setText('rcConn', rc.active_connections || rc.total_connections || 0);
     setText('rcStreams', rc.active_streams || rc.total_streams || 0);
   }
+
+  deriveEvents(snap);
 }
 
 function updateGauge(id, data) {
@@ -549,9 +686,9 @@ function renderResults(res) {
   const body = document.getElementById('resultsBody');
   body.innerHTML = res.slice(0, 15).map(r => `
     <tr>
-      <td style="color:var(--color-blue); font-family:var(--font-mono); font-size:10px">${r.query_id}</td>
-      <td title="${r.peer_id_full}" style="color:var(--text-main)">${r.peer_id}</td>
-      <td><span class="badge ${r.status==='success'?'badge-success':r.status==='timeout'?'badge-warn':'badge-error'}">${r.status}</span></td>
+      <td style="color:var(--color-blue); font-family:var(--font-mono); font-size:10px">${escapeHtml(r.query_id)}</td>
+      <td title="${escapeHtml(r.peer_id_full)}" style="color:var(--text-main)">${escapeHtml(r.peer_id)}</td>
+      <td><span class="badge ${r.status==='success'?'badge-success':r.status==='timeout'?'badge-warn':'badge-error'}">${escapeHtml(r.status)}</span></td>
       <td style="font-family:var(--font-mono); text-align:right">${Math.round(r.duration_ms)}ms</td>
       <td style="color:var(--text-dim); text-align:center">${r.hops||0}</td>
     </tr>
@@ -566,49 +703,102 @@ function renderLiveQueries(qs) {
   }
   el.innerHTML = qs.map(q => `
     <div style="display:flex; justify-content:space-between; font-size:10px; margin-bottom:4px; padding:6px; background:rgba(50,116,217,0.08); border:1px solid rgba(50,116,217,0.2); border-radius:3px;">
-      <span style="color:var(--color-blue); font-weight:700">${q.query_id}</span>
-      <span style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; margin:0 8px;">${q.peer_id}</span>
-      <span style="color:var(--color-orange); font-weight:700">${q.status.toUpperCase()}</span>
+      <span style="color:var(--color-blue); font-weight:700">${escapeHtml(q.query_id)}</span>
+      <span style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:120px; margin:0 8px;">${escapeHtml(q.peer_id)}</span>
+      <span style="color:var(--color-orange); font-weight:700">${escapeHtml(q.status.toUpperCase())}</span>
     </div>
   `).join('');
 }
 
-function renderTopology(nodes) {
-  const svg = document.getElementById('topology');
-  if (!svg) return;
-  const parent = svg.parentElement;
-  const W = parent.clientWidth, H = parent.clientHeight;
-  if (W === 0 || H === 0) return;
+const hashCache = new Map();  // peer_id -> BigInt of sha256(id)[:20]
+async function idBig(pid) {
+  if (hashCache.has(pid)) return hashCache.get(pid);
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pid));
+  const bytes = new Uint8Array(buf).slice(0, 20);
+  let v = 0n;
+  for (const b of bytes) v = (v << 8n) | BigInt(b);
+  hashCache.set(pid, v);
+  if (hashCache.size > 5000) hashCache.clear();
+  return v;
+}
 
-  svg.setAttribute('width', W); svg.setAttribute('height', H);
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.innerHTML = '';
-  
-  const cx = W/2, cy = H/2, r = Math.min(W, H) * 0.38;
-  const count = Math.min(nodes.length, 36);
-  
-  nodes.slice(0, count).forEach((n, i) => {
-    const a = (i / count) * Math.PI * 2 - (Math.PI / 2);
-    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', cx); line.setAttribute('y1', cy); line.setAttribute('x2', x); line.setAttribute('y2', y);
-    line.setAttribute('stroke', 'rgba(255,255,255,0.04)'); svg.appendChild(line);
-    
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', x); circle.setAttribute('cy', y); circle.setAttribute('r', 3.5);
-    circle.setAttribute('fill', n.online ? 'var(--color-green)' : 'var(--color-red)');
-    circle.setAttribute('opacity', n.online ? '0.9' : '0.4');
-    if (n.online) circle.setAttribute('style', 'filter: drop-shadow(0 0 3px var(--color-green));');
-    svg.appendChild(circle);
-  });
-  
-  const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  center.setAttribute('cx', cx); center.setAttribute('cy', cy); center.setAttribute('r', 7);
-  center.setAttribute('fill', 'var(--color-blue)'); 
-  center.setAttribute('style', 'filter: drop-shadow(0 0 6px var(--color-blue));');
-  svg.appendChild(center);
-  
-  setText('topoCount', `${nodes.filter(n=>n.online).length} Nodes Online`);
+let topoBusy = false;
+async function renderTopology(nodes, lastResult, onlineCount) {
+  if (topoBusy) return;           // skip tick if previous render still hashing
+  topoBusy = true;
+  try {
+    const svg = document.getElementById('topology');
+    if (!svg) return;
+    const parent = svg.parentElement;
+    const W = parent.clientWidth, H = parent.clientHeight;
+    if (W === 0 || H === 0) return;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const target = lastResult?.peer_id_full || null;
+    const targetBig = target ? await idBig(target) : null;
+    const shown = nodes.slice(0, 36);
+    const dists = [];
+    for (const n of shown) {
+      const d = targetBig === null ? 1n : (await idBig(n.peer_id_full)) ^ targetBig;
+      dists.push(d);
+    }
+    const maxD = dists.reduce((a, b) => (b > a ? b : a), 1n);
+
+    const cx = W / 2, cy = H / 2, rMax = Math.min(W, H) * 0.42;
+    const pos = new Map();  // peer_id_full -> [x, y]
+    svg.innerHTML = '';
+    shown.forEach((n, i) => {
+      const a = (i / shown.length) * Math.PI * 2 - Math.PI / 2;
+      // radius ∝ XOR distance from query target (closer = nearer center)
+      const frac = targetBig === null ? 1 : Number((dists[i] * 1000n) / maxD) / 1000;
+      const r = rMax * (0.25 + 0.75 * frac);
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      pos.set(n.peer_id_full, [x, y]);
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', 3.5);
+      c.setAttribute('fill', n.online ? 'var(--color-green)' : 'var(--color-red)');
+      c.setAttribute('opacity', n.online ? '0.9' : '0.4');
+      svg.appendChild(c);
+    });
+
+    // Center = query target (or hub when no query yet)
+    const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    center.setAttribute('cx', cx); center.setAttribute('cy', cy); center.setAttribute('r', 7);
+    center.setAttribute('fill', 'var(--color-blue)');
+    svg.appendChild(center);
+
+    // Lookup path of the most recent query, hop by hop
+    const path = lastResult?.path || [];
+    let prev = null;
+    path.forEach((pid, hop) => {
+      const p = pos.get(pid);
+      if (!p) return;
+      if (prev) {
+        const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        l.setAttribute('x1', prev[0]); l.setAttribute('y1', prev[1]);
+        l.setAttribute('x2', p[0]); l.setAttribute('y2', p[1]);
+        l.setAttribute('stroke', 'var(--color-orange)'); l.setAttribute('stroke-width', '1.5');
+        svg.appendChild(l);
+      }
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      ring.setAttribute('cx', p[0]); ring.setAttribute('cy', p[1]); ring.setAttribute('r', 6);
+      ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', 'var(--color-orange)');
+      svg.appendChild(ring);
+      prev = p;
+    });
+    // last hop → center (target)
+    if (prev && lastResult?.found) {
+      const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l.setAttribute('x1', prev[0]); l.setAttribute('y1', prev[1]);
+      l.setAttribute('x2', cx); l.setAttribute('y2', cy);
+      l.setAttribute('stroke', 'var(--color-orange)'); l.setAttribute('stroke-width', '1.5');
+      svg.appendChild(l);
+    }
+
+    setText('topoCount', `${onlineCount} Nodes Online`);
+  } finally {
+    topoBusy = false;
+  }
 }
 
 async function fireQuery() {
@@ -636,6 +826,9 @@ function openConfig() {
     document.getElementById('cfgMaxQ').value = c.max_concurrent_queries;
     document.getElementById('cfgMaxW').value = c.max_random_walks;
     document.getElementById('cfgTimeout').value = c.query_timeout_s;
+    const smc = (lastSnapshot.stream_manager || {}).config || {};
+    document.getElementById('cfgMaxS').value = smc.max_streams ?? 50;
+    document.getElementById('cfgStreamT').value = smc.stream_timeout_s ?? 60;
   }
   document.getElementById('configModal').style.display = 'flex';
 }
@@ -647,7 +840,9 @@ async function applyConfig() {
     body: JSON.stringify({
       max_concurrent_queries: parseInt(document.getElementById('cfgMaxQ').value),
       max_random_walks: parseInt(document.getElementById('cfgMaxW').value),
-      query_timeout: parseFloat(document.getElementById('cfgTimeout').value)
+      query_timeout: parseFloat(document.getElementById('cfgTimeout').value),
+      max_streams: parseInt(document.getElementById('cfgMaxS').value),
+      stream_timeout: parseFloat(document.getElementById('cfgStreamT').value)
     })
   });
   closeConfig();

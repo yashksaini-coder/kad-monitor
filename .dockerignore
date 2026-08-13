@@ -1,0 +1,8 @@
+.venv/
+.git/
+.remember/
+__pycache__/
+reports/
+history.db
+docs/
+tests/

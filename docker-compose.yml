@@ -1,0 +1,11 @@
+services:
+  kad-monitor:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - kad-data:/data
+    restart: unless-stopped
+
+volumes:
+  kad-data:

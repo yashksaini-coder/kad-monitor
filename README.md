@@ -51,8 +51,8 @@
 
 | Layer | Component | Role |
 |-------|-----------|------|
-| **A** | `DHTQueryCoordinator._query_limiter` | Hard cap on ALL DHT ops |
-| **B** | `DHTQueryCoordinator._rw_limiter` | Sub-cap on background walks |
+| **A** | `DHTQueryCoordinator._query_limiter` | Hard cap on ALL DHT queries |
+| **B** | `DHTQueryCoordinator._rw_limiter` | Sub-cap on background random walks |
 | **C** | `StreamManager._limiter` | Hard cap on physical streams |
 
 **Before the fix** (original py-libp2p behaviour):
@@ -72,9 +72,16 @@
 ### 1. Install dependencies
 
 ```bash
-cd libp2p-dht-monitor
+cd kad-monitor
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Simulated mode (the default) needs only `trio`, `fastapi`, `hypercorn[trio]`,
+`anyio[trio]`, and `pydantic` — all installed above. Real libp2p is **optional**
+and only required for `--mode real`; it's commented out in `requirements.txt`
+because `libp2p==0.6.0` doesn't build on Python 3.14 (coincurve build
+failure). See [Swapping in Real py-libp2p](#swapping-in-real-py-libp2p).
 
 ### 2. Run the monitor
 
@@ -89,6 +96,7 @@ python main.py
 ```
 --host           Bind host          (default: 0.0.0.0)
 --port           Bind port          (default: 8000)
+--mode           simulated | real   (default: simulated)
 --nodes          Simulated nodes    (default: 60)
 --scenario       Initial scenario   (NORMAL | DEGRADED | STRESSED | SATURATED)
 --max-queries    Layer A cap        (default: 10)
@@ -96,6 +104,13 @@ python main.py
 --max-streams    Stream pool cap    (default: 50)
 --query-timeout  Per-query timeout  (default: 20s)
 --walk-interval  Random walk period (default: 4s)
+--history-db     SQLite snapshot history path ('' disables)  (default: history.db)
+--experiment     Run a headless A/B experiment from a JSON config and exit
+
+# Real mode only:
+--libp2p-port, --bootstrap, --enable-mdns, --enable-upnp, --enable-quic,
+--enable-random-walk / --no-enable-random-walk, --enable-pubsub / --no-enable-pubsub,
+--max-connections, --max-libp2p-streams
 ```
 
 **Reproduce the original bug** (no coordinator, minimal caps):
@@ -130,6 +145,9 @@ pytest tests/test_integration.py -v
 pytest tests/test_coordinator.py::test_background_walks_cannot_starve_user_queries -v
 ```
 
+`tests/test_libp2p_node.py` skips cleanly when `libp2p` isn't installed —
+the full suite is green in a bare simulated-mode venv.
+
 ### Key test cases
 
 | Test | What it verifies |
@@ -143,68 +161,138 @@ pytest tests/test_coordinator.py::test_background_walks_cannot_starve_user_queri
 
 ---
 
-## Dashboard Features
+## A/B Experiment
 
-| Panel | Description |
-|-------|-------------|
-| **Capacity Limiters** | Live gauge of Layer A / Layer B / Stream pool utilisation |
-| **Query Counters** | Total / success / failed / timeout with success % |
-| **Throughput chart** | Rolling QPS over last 60 ticks |
-| **Duration chart** | Rolling avg duration (ms) |
-| **Concurrency chart** | Rolling concurrent query count |
-| **Live Queries** | Real-time view of in-flight queries with status |
-| **Network Topology** | SVG map of simulated nodes (green=online, red=offline) |
-| **Recent Results** | Scrollable result table with full metadata |
-| **Event Log** | Timestamped event stream |
+```bash
+python main.py --experiment experiments/baseline.json
+```
 
-### Interactive Controls
+Runs the same workload against two headless arms — no HTTP server involved —
+and writes both a JSON and an HTML report to `reports/`. `baseline.json` pits
+an `unprotected` arm (caps effectively unlimited) against a `protected` arm
+(the real Layer A/B/C caps: 10 queries / 3 walks / 50 streams) against a
+STRESSED, 60-node network at 30 QPS for 20s each (~45s total run time). The
+unprotected arm's concurrency chases the offered load — peaking around 24
+simultaneous queries against the network — while the protected arm holds
+steady at its 10-query ceiling and queues the rest, trading a longer tail
+for a coordinator that never falls over. That's the whole point of the
+dual-layer limiter: bounded concurrency instead of unbounded and eventually
+broken.
 
-- **Fire Query**: Single manual `find_peer` (known or unknown peer)
-- **Load Generator**: Continuous query storm at configurable QPS
-- **Network Scenario**: Switch between NORMAL / DEGRADED / STRESSED / SATURATED
-- **Configure Limits**: Hot-reload `max_queries`, `max_walks`, `query_timeout`, `max_streams`
+---
+
+## Docker
+
+```bash
+docker compose up
+# Dashboard → http://localhost:8000/
+```
+
+Builds from `Dockerfile` (single-stage — pure-Python wheels, so a build
+stage buys nothing) and runs `main.py` with `--history-db /data/history.db`.
+Snapshot history persists across restarts in the `kad-data` named volume.
+The image ships a `HEALTHCHECK` that polls `/healthz`.
 
 ---
 
 ## Swapping in Real py-libp2p
 
 The coordinator accepts any `async (peer_id: str) → (found, closest_peers, hops)` callable.
-Replace the simulation with real libp2p:
+Real mode wires this up automatically — no code changes needed:
 
-```python
-from libp2p import new_node
-from libp2p.kademlia.kad_peerinfo import create_kad_peerinfo
-
-async def real_query_fn(peer_id: str):
-    async with stream_manager.open_stream(peer_id, "/libp2p/kad/1.0.0"):
-        # Real libp2p DHT call here
-        result = await libp2p_node.find_peer(peer_id)
-        return bool(result), result.closest_peers, result.num_hops
-
-result = await coordinator.find_peer(target_id, real_query_fn)
+```bash
+pip install libp2p==0.6.0 multiaddr>=0.0.9 base58>=2.1.1
+python main.py --mode real --libp2p-port 4001 --bootstrap /ip4/1.2.3.4/tcp/4001/p2p/PeerID...
 ```
 
-The coordinator, StreamManager, and all resource lifecycle guarantees remain identical.
+`main.py --mode real` constructs a `Libp2pNode` (KadDHT + GossipSub +
+ResourceManager, `src/libp2p_node.py`) and wraps it in `RealDHTNetwork`, an
+adapter that exposes the same `query()` / `snapshot()` / `set_scenario()` /
+`peer_ids` surface as `SimulatedDHTNetwork` — so the coordinator, StreamManager,
+and workers treat real and simulated backends identically. `libp2p` is only
+imported inside this code path; simulated mode (the default) never touches it.
 
 ---
 
 ## Project Structure
 
 ```
-libp2p-dht-monitor/
+kad-monitor/
 ├── src/
 │   ├── coordinator.py      # DHTQueryCoordinator (trio.CapacityLimiter dual-layer)
 │   ├── stream_manager.py   # StreamManager (physical stream lifecycle)
 │   ├── dht_simulation.py   # Kademlia-style DHT simulation
+│   ├── libp2p_node.py      # Libp2pNode + RealDHTNetwork (real libp2p, --mode real only)
+│   ├── experiment.py       # Headless A/B experiment runner
+│   ├── history.py          # SQLite-backed snapshot history
 │   └── workers.py          # Background trio tasks
 ├── api/
 │   └── app.py              # FastAPI app (REST + WebSocket)
 ├── static/
 │   └── index.html          # Real-time monitoring dashboard
+├── experiments/
+│   └── baseline.json       # A/B experiment config (see A/B Experiment)
 ├── tests/
 │   ├── test_coordinator.py # Unit tests (pytest-trio)
 │   └── test_integration.py # Integration tests
 ├── main.py                 # Entry point (Hypercorn + Trio)
+├── pyproject.toml          # pytest config (trio_mode), project metadata
+├── Dockerfile
+├── docker-compose.yml
+├── .github/workflows/ci.yml
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/healthz` | Liveness check (used by Docker `HEALTHCHECK`) |
+| GET | `/metrics` | Plaintext metrics snapshot |
+| GET | `/api/snapshot` | Full system snapshot (same shape as WS pushes) |
+| GET | `/api/history` | Recent snapshot history from SQLite (survives reload) |
+| GET | `/api/nodes` | Current simulated/real network node list |
+| POST | `/api/query` | Fire a single manual `find_peer` query |
+| POST | `/api/config` | Hot-reload `max_queries` / `max_walks` / `query_timeout` / `max_streams` |
+| POST | `/api/network/scenario` | Switch NORMAL / DEGRADED / STRESSED / SATURATED |
+| GET/POST | `/api/loadgen` | Read / start-stop-configure the load generator |
+| POST | `/api/network/peer` | Add a peer (chaos control) |
+| DELETE | `/api/network/peer/{id}` | Remove a peer (chaos control) |
+| POST | `/api/network/peer/{id}/toggle` | Kill/revive a peer online/offline (chaos control) |
+| POST | `/api/dht/put` \| `/api/dht/get` | DHT key-value put/get |
+| POST | `/api/dht/provide` \| `/api/dht/providers` | Content routing (provide/find-providers) |
+| POST | `/api/pubsub/subscribe` \| `/unsubscribe` \| `/publish` | GossipSub controls |
+| GET | `/api/pubsub/topics` | Subscribed topics |
+| POST | `/api/peer/connect` | Dial a peer (real mode) |
+| GET | `/api/peer/connected` | Connected peers |
+| GET | `/api/node/info` | Node identity / listen addresses |
+| WS | `/ws` | 500ms push of full system snapshot |
+| GET | `/` | Dashboard UI |
+
+---
+
+## Dashboard Features
+
+| Panel | Description |
+|-------|-------------|
+| **Capacity Limiters** | Live gauge of Layer A / Layer B / Stream pool utilisation |
+| **Query Counters** | Total / success / failed / timeout with success % |
+| **Throughput chart** | Rolling QPS over last 60 ticks, requested/fired/done load-gen counters |
+| **Duration chart** | Rolling avg duration (ms), with p95/p99 latency percentiles |
+| **Concurrency chart** | Rolling concurrent query count |
+| **Live Queries** | Real-time view of in-flight queries with status |
+| **Network Topology** | SVG map of nodes (green=online, red=offline) with live lookup-path rendering as queries hop |
+| **Recent Results** | Scrollable result table with full metadata |
+| **Event Log** | Real, timestamped stream of scenario changes, chaos events, and query outcomes |
+
+### Interactive Controls
+
+- **Fire Query**: Single manual `find_peer` (known or unknown peer)
+- **Load Generator**: Continuous query storm at configurable QPS
+- **Scenario Switcher**: Buttons to flip between NORMAL / DEGRADED / STRESSED / SATURATED live
+- **Peer Chaos**: Add / kill / revive individual peers to watch the network and topology react
+- **System Config**: Modal to hot-reload `max_queries`, `max_walks`, `query_timeout`, `max_streams`, `stream_timeout` (5 fields)
+</content>

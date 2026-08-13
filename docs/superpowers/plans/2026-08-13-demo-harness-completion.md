@@ -18,7 +18,7 @@
 - `query_fn` contract stays backward compatible: coordinator accepts BOTH `(found, closest, hops)` and `(found, closest, hops, path)` returns.
 - Layer naming everywhere: **Layer A = query limiter, Layer B = walk sub-limiter, Layer C = stream pool** (the README scheme).
 - Run all tests with: `.venv/bin/python -m pytest tests/ -v` from `/home/yks/projects/kad-monitor`.
-- Every commit message ends with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- Commit messages must NOT contain any AI co-author trailer (no `Co-Authored-By: Claude …`). Plain conventional-commit messages only.
 - `tests/test_libp2p_node.py` must skip cleanly (not error) when libp2p is absent.
 
 ---

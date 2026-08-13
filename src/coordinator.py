@@ -18,15 +18,24 @@ exhausted.
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 import trio
 
 logger = logging.getLogger(__name__)
+
+
+def _percentile(sorted_vals: list[float], pct: float) -> float:
+    """Linear-interpolated percentile; sorted_vals must be pre-sorted."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * pct
+    f = int(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +68,7 @@ class QueryResult:
     found: bool = False
     closest_peers: list[str] = field(default_factory=list)
     hops: int = 0
+    path: list[str] = field(default_factory=list)
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -72,6 +82,7 @@ class QueryResult:
             "found": self.found,
             "closest_peers": self.closest_peers[:5],
             "hops": self.hops,
+            "path": self.path,
             "error": self.error,
         }
 
@@ -91,7 +102,7 @@ class LiveQuery:
     limiter_wait_ms: float = 0.0
 
     def to_dict(self) -> dict:
-        elapsed_ms = (time.monotonic() - self.started_at) * 1000
+        elapsed_ms = (trio.current_time() - self.started_at) * 1000
         return {
             "query_id": self.query_id,
             "peer_id": self.peer_id[:20] + "…" if len(self.peer_id) > 20 else self.peer_id,
@@ -198,7 +209,8 @@ class DHTQueryCoordinator:
         """
         Locate *peer_id* via the supplied async *query_fn*.
 
-        ``query_fn(peer_id)`` must return ``(found: bool, closest_peers: list[str], hops: int)``.
+        ``query_fn(peer_id)`` must return ``(found: bool, closest_peers: list[str], hops: int)``
+        or ``(found: bool, closest_peers: list[str], hops: int, path: list[str])``.
 
         Resource lifecycle
         ------------------
@@ -209,7 +221,7 @@ class DHTQueryCoordinator:
         self._bootstrap()
 
         query_id = f"q-{str(uuid.uuid4())[:8]}"
-        started_at = time.monotonic()
+        started_at = trio.current_time()
 
         lq = LiveQuery(
             query_id=query_id,
@@ -225,7 +237,7 @@ class DHTQueryCoordinator:
         try:
             result = await self._run_with_capacity(lq, query_fn, started_at)
         except trio.Cancelled:
-            duration_ms = (time.monotonic() - started_at) * 1000
+            duration_ms = (trio.current_time() - started_at) * 1000
             result = QueryResult(
                 query_id=query_id,
                 peer_id=peer_id,
@@ -255,18 +267,18 @@ class DHTQueryCoordinator:
         assert self._query_limiter is not None
         assert self._rw_limiter is not None
 
-        limiter_wait_start = time.monotonic()
+        limiter_wait_start = trio.current_time()
 
         # Background walks must acquire BOTH limiters (walk ⊆ query budget).
         # User queries acquire only the main limiter.
         if lq.priority == QueryPriority.BACKGROUND:
             async with self._rw_limiter:
                 async with self._query_limiter:
-                    lq.limiter_wait_ms = (time.monotonic() - limiter_wait_start) * 1000
+                    lq.limiter_wait_ms = (trio.current_time() - limiter_wait_start) * 1000
                     return await self._execute(lq, query_fn, started_at)
         else:
             async with self._query_limiter:
-                lq.limiter_wait_ms = (time.monotonic() - limiter_wait_start) * 1000
+                lq.limiter_wait_ms = (trio.current_time() - limiter_wait_start) * 1000
                 return await self._execute(lq, query_fn, started_at)
 
     async def _execute(
@@ -289,8 +301,10 @@ class DHTQueryCoordinator:
 
         with trio.move_on_after(self._query_timeout) as cancel_scope:
             try:
-                found, closest_peers, hops = await query_fn(lq.peer_id)
-                duration_ms = (time.monotonic() - started_at) * 1000
+                res = await query_fn(lq.peer_id)
+                found, closest_peers, hops, *rest = res
+                path = list(rest[0]) if rest else []
+                duration_ms = (trio.current_time() - started_at) * 1000
                 self._successes += 1
                 self._total_duration_ms += duration_ms
                 return QueryResult(
@@ -302,9 +316,10 @@ class DHTQueryCoordinator:
                     found=found,
                     closest_peers=closest_peers,
                     hops=hops,
+                    path=path,
                 )
             except Exception as exc:
-                duration_ms = (time.monotonic() - started_at) * 1000
+                duration_ms = (trio.current_time() - started_at) * 1000
                 self._failures += 1
                 logger.warning("Query %s failed: %s", lq.query_id, exc)
                 return QueryResult(
@@ -317,7 +332,7 @@ class DHTQueryCoordinator:
                 )
 
         # cancel_scope fell through → timeout
-        duration_ms = (time.monotonic() - started_at) * 1000
+        duration_ms = (trio.current_time() - started_at) * 1000
         self._timeouts += 1
         logger.warning(
             "Query %s timed out after %.1fs", lq.query_id, self._query_timeout
@@ -336,7 +351,7 @@ class DHTQueryCoordinator:
     # ------------------------------------------------------------------
 
     def _record(self, result: QueryResult) -> None:
-        now = time.monotonic()
+        now = trio.current_time()
         self._completion_times.append(now)
         # Trim to window
         cutoff = now - self._throughput_window
@@ -351,7 +366,7 @@ class DHTQueryCoordinator:
             try:
                 await self._on_snapshot(self.snapshot())
             except Exception:
-                pass  # never let broadcast errors kill a query
+                logger.exception("on_snapshot callback failed")
 
     # ------------------------------------------------------------------
     # Snapshot (serialisable)
@@ -368,6 +383,8 @@ class DHTQueryCoordinator:
         success_rate = (self._successes / max(total_done, 1)) * 100
 
         throughput = len(self._completion_times) / self._throughput_window
+
+        durations = sorted(r.duration_ms for r in self._history)
 
         return {
             "coordinator": {
@@ -389,6 +406,9 @@ class DHTQueryCoordinator:
                     "avg_duration_ms": round(
                         self._total_duration_ms / max(self._successes, 1), 1
                     ),
+                    "p50_ms": round(_percentile(durations, 0.50), 1),
+                    "p95_ms": round(_percentile(durations, 0.95), 1),
+                    "p99_ms": round(_percentile(durations, 0.99), 1),
                 },
                 "concurrency": {
                     "current": len(

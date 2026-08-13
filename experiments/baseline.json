@@ -1,0 +1,9 @@
+{
+  "name": "baseline",
+  "network": {"nodes": 60, "scenario": "STRESSED"},
+  "workload": {"qps": 30.0, "duration_s": 20},
+  "arms": {
+    "unprotected": {"max_queries": 10000, "max_walks": 9999, "max_streams": 10000, "query_timeout": 20.0},
+    "protected": {"max_queries": 10, "max_walks": 3, "max_streams": 50, "query_timeout": 20.0}
+  }
+}

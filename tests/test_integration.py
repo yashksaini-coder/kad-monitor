@@ -58,7 +58,7 @@ async def test_find_known_peer(coordinator, network, stream_manager):
             return await network.query(pid)
 
     result = await coordinator.find_peer(target, query_fn)
-    assert result.status in (QueryStatus.SUCCESS, QueryStatus.TIMEOUT)
+    assert result.status in (QueryStatus.SUCCESS, QueryStatus.TIMEOUT, QueryStatus.FAILED)
     # Network simulation may or may not succeed, but it should not hang
 
 
@@ -178,11 +178,15 @@ async def test_stream_manager_cap_respected():
 
 @pytest.mark.trio
 async def test_scenario_affects_latency(coordinator, stream_manager):
-    """Stressed scenario should have higher average durations."""
+    """Stressed scenario should have higher average durations for successful queries."""
+    import itertools
+    import random
     import statistics
 
-    normal_net = SimulatedDHTNetwork(node_count=15, scenario="NORMAL")
-    stressed_net = SimulatedDHTNetwork(node_count=15, scenario="STRESSED")
+    # Seeded for determinism — the simulation draws from global random.
+    # RNG state is captured/restored so later tests aren't order-dependent.
+    SEED = 1
+    state = random.getstate()
 
     async def make_query_fn(net):
         async def _fn(pid: str):
@@ -190,20 +194,46 @@ async def test_scenario_affects_latency(coordinator, stream_manager):
                 return await net.query(pid)
         return _fn
 
-    normal_results = []
-    for pid in normal_net.peer_ids[:3]:
-        r = await coordinator.find_peer(pid, await make_query_fn(normal_net))
-        normal_results.append(r.duration_ms)
+    async def success_durations(net, min_successes=3, max_attempts=30):
+        # STRESSED injects stream errors (OSError) before the latency sleep, so
+        # failed queries finish near-instantly and would skew the mean. Only
+        # SUCCESS results carry the scenario's real latency, so keep firing
+        # queries (bounded) until we have enough successes to compare fairly.
+        durations = []
+        peer_iter = itertools.cycle(net.peer_ids)
+        for _ in range(max_attempts):
+            if len(durations) >= min_successes:
+                break
+            pid = next(peer_iter)
+            r = await coordinator.find_peer(pid, await make_query_fn(net))
+            if r.status == QueryStatus.SUCCESS:
+                durations.append(r.duration_ms)
+        return durations
 
-    stressed_results = []
-    for pid in stressed_net.peer_ids[:3]:
-        r = await coordinator.find_peer(pid, await make_query_fn(stressed_net))
-        stressed_results.append(r.duration_ms)
+    try:
+        # Re-seed before each scenario so its draw sequence doesn't depend on
+        # how many random numbers the other scenario's build/query consumed.
+        random.seed(SEED)
+        normal_net = SimulatedDHTNetwork(node_count=15, scenario="NORMAL")
+        normal_results = await success_durations(normal_net)
+
+        random.seed(SEED)
+        stressed_net = SimulatedDHTNetwork(node_count=15, scenario="STRESSED")
+        stressed_results = await success_durations(stressed_net)
+    finally:
+        random.setstate(state)
+
+    assert len(normal_results) >= 3, "expected at least 3 successful NORMAL queries"
+    assert len(stressed_results) >= 3, "expected at least 3 successful STRESSED queries"
+
+    normal_success_mean = statistics.mean(normal_results)
+    stressed_success_mean = statistics.mean(stressed_results)
 
     # Stressed queries should generally take longer
-    if normal_results and stressed_results:
-        assert statistics.mean(stressed_results) >= statistics.mean(normal_results) * 0.5
-        # Relaxed bound — we just want to confirm direction, not exact numbers
+    assert stressed_success_mean > normal_success_mean, (
+        f"STRESSED (base 400ms) must be slower than NORMAL (base 40ms): "
+        f"{stressed_success_mean:.0f}ms vs {normal_success_mean:.0f}ms"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -225,3 +255,47 @@ async def test_full_snapshot_structure(coordinator, network, stream_manager):
     ]
     for key in required_keys:
         assert key in snap, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Lookup path recording
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.trio
+async def test_query_records_lookup_path():
+    network = SimulatedDHTNetwork(node_count=30, scenario="NORMAL")
+    coordinator = DHTQueryCoordinator(
+        max_concurrent_queries=10, max_random_walks=3, query_timeout=30.0
+    )
+
+    async def _query_fn(pid):
+        return await network.query(pid)
+
+    # Retry a few times: NORMAL injects 5% stream errors → occasional FAILED
+    for _ in range(5):
+        target = network.peer_ids[0]
+        result = await coordinator.find_peer(target, _query_fn)
+        if result.status == QueryStatus.SUCCESS:
+            break
+    assert result.status == QueryStatus.SUCCESS
+
+    assert result.hops > 0
+    assert len(result.path) == result.hops
+    assert all(p in network.peer_ids for p in result.path)
+    assert result.to_dict()["path"] == result.path
+
+
+# ---------------------------------------------------------------------------
+# Scenario switching
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.trio
+async def test_set_scenario_rebuilds_not_accumulates():
+    net = SimulatedDHTNetwork(node_count=30, scenario="NORMAL")
+    assert net.snapshot()["network"]["total_nodes"] == 30
+    net.set_scenario("STRESSED")
+    assert net.snapshot()["network"]["total_nodes"] == 30
+    net.set_scenario("NORMAL")
+    assert net.snapshot()["network"]["total_nodes"] == 30

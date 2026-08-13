@@ -1,0 +1,10 @@
+[project]
+name = "kad-monitor"
+version = "1.0.0"
+description = "Test harness + real-time dashboard validating DHTQueryCoordinator resource-exhaustion fix"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+trio_mode = true

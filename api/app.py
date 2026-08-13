@@ -10,9 +10,12 @@ Endpoints
 ---------
 GET  /api/snapshot           -> full system state (one-shot)
 GET  /api/nodes              -> list of peers
+GET  /api/history            -> historical QPS/latency/concurrency snapshots
 POST /api/query              -> trigger a user find_peer
 POST /api/config             -> hot-reload coordinator / stream limits
 POST /api/network/scenario   -> switch load scenario
+DELETE /api/network/peer/{id} -> remove a peer (simulated mode)
+POST /api/network/peer/{id}/toggle -> toggle peer online/offline (simulated mode)
 POST /api/loadgen            -> start / stop the load generator
 POST /api/dht/put            -> DHT put_value (real mode)
 POST /api/dht/get            -> DHT get_value (real mode)
@@ -35,9 +38,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import trio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.coordinator import QueryPriority
@@ -55,11 +58,11 @@ class QueryRequest(BaseModel):
 
 
 class ConfigRequest(BaseModel):
-    max_concurrent_queries: int | None = None
-    max_random_walks: int | None = None
-    query_timeout: float | None = None
-    max_streams: int | None = None
-    stream_timeout: float | None = None
+    max_concurrent_queries: int | None = Field(default=None, ge=1)
+    max_random_walks: int | None = Field(default=None, ge=1)
+    query_timeout: float | None = Field(default=None, gt=0)
+    max_streams: int | None = Field(default=None, ge=1)
+    stream_timeout: float | None = Field(default=None, gt=0)
 
 
 class ScenarioRequest(BaseModel):
@@ -100,10 +103,12 @@ def create_app(
     network,
     stream_manager,
     load_gen_state: dict,
-    broadcast_send: trio.MemorySendChannel,
-    broadcast_recv: trio.MemoryReceiveChannel,
     libp2p_node=None,
+    mode: str = "simulated",
+    history=None,
 ) -> tuple:
+    started_at = time.time()
+
     app = FastAPI(
         title="libp2p DHT Monitor",
         description=(
@@ -114,25 +119,23 @@ def create_app(
         version="2.0.0",
     )
 
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).parent.parent / "static"),
+        name="static",
+    )
+
     connected_ws: list[WebSocket] = []
 
-    # Background task: fan out broadcast channel to all WebSocket clients
-    async def _ws_broadcaster():
-        async for snapshot in broadcast_recv:
-            dead: list[WebSocket] = []
-            for ws in list(connected_ws):
-                try:
-                    await ws.send_text(json.dumps(snapshot, default=str))
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                connected_ws.remove(ws)
-
-    @app.on_event("startup")
-    async def _start_broadcaster():
-        async with trio.open_nursery() as tg:
-            tg.start_soon(_ws_broadcaster)
-            tg.cancel_scope.cancel()
+    def _full_snapshot() -> dict:
+        return {
+            **coordinator.snapshot(),
+            **stream_manager.snapshot(),
+            **network.snapshot(),
+            "load_gen": dict(load_gen_state),
+            "mode": mode,
+            "ts": time.time(),
+        }
 
     # -----------------------------------------------------------------------
     # Core REST routes
@@ -140,16 +143,48 @@ def create_app(
 
     @app.get("/api/snapshot")
     async def get_snapshot():
-        return {
-            **coordinator.snapshot(),
-            **stream_manager.snapshot(),
-            **network.snapshot(),
-            "ts": time.time(),
-        }
+        return _full_snapshot()
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok", "mode": mode,
+                "uptime_s": round(time.time() - started_at, 1)}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics():
+        snap = _full_snapshot()
+        coord = snap["coordinator"]
+        ql = snap["capacity_limiter"]
+        rwl = snap["random_walk_limiter"]
+        sm = snap["stream_manager"]
+        lines = ["# TYPE dht_queries_total counter"]
+        for status in ("success", "failed", "timeout", "cancelled"):
+            lines.append(f'dht_queries_total{{status="{status}"}} {coord["counters"][status]}')
+        lines += [
+            "# TYPE dht_query_limiter_borrowed gauge",
+            f"dht_query_limiter_borrowed {ql['borrowed']}",
+            f"dht_query_limiter_capacity {ql['total']}",
+            f"dht_walk_limiter_borrowed {rwl['borrowed']}",
+            f"dht_walk_limiter_capacity {rwl['total']}",
+            f"dht_stream_pool_open {sm['pool']['open']}",
+            f"dht_stream_pool_capacity {sm['config']['max_streams']}",
+            "# TYPE dht_throughput_qps gauge",
+            f"dht_throughput_qps {coord['rates']['throughput_qps']}",
+            f"dht_latency_p95_ms {coord['rates']['p95_ms']}",
+            f"dht_latency_p99_ms {coord['rates']['p99_ms']}",
+            f"dht_loadgen_achieved_qps {snap['load_gen'].get('achieved_qps', 0)}",
+        ]
+        return "\n".join(lines) + "\n"
 
     @app.get("/api/nodes")
     async def get_nodes():
         return {"nodes": network.snapshot()["nodes"]}
+
+    @app.get("/api/history")
+    async def get_history(minutes: float = 30.0):
+        if history is None:
+            return {"points": []}
+        return {"points": history.query(minutes=min(minutes, 24 * 60))}
 
     @app.post("/api/query")
     async def trigger_query(req: QueryRequest):
@@ -172,6 +207,23 @@ def create_app(
 
     @app.post("/api/config")
     async def update_config(req: ConfigRequest):
+        current = coordinator.snapshot()["coordinator"]["config"]
+        effective_queries = (
+            req.max_concurrent_queries
+            if req.max_concurrent_queries is not None
+            else current["max_concurrent_queries"]
+        )
+        effective_walks = (
+            req.max_random_walks
+            if req.max_random_walks is not None
+            else current["max_random_walks"]
+        )
+        if effective_walks >= effective_queries:
+            raise HTTPException(
+                400,
+                "max_random_walks must be < max_concurrent_queries "
+                "to preserve capacity for user queries.",
+            )
         coordinator.reconfigure(
             max_concurrent_queries=req.max_concurrent_queries,
             max_random_walks=req.max_random_walks,
@@ -211,6 +263,23 @@ def create_app(
             return {"status": "ok", "message": "Peer management handled by real network"}
         except Exception as e:
             raise HTTPException(400, str(e))
+
+    @app.delete("/api/network/peer/{peer_id}")
+    async def remove_peer(peer_id: str):
+        if libp2p_node is not None:
+            raise HTTPException(400, "Peer removal is simulated-mode only")
+        if network.remove_peer(peer_id):
+            return {"status": "removed", "peer_id": peer_id}
+        raise HTTPException(404, f"Unknown peer: {peer_id}")
+
+    @app.post("/api/network/peer/{peer_id}/toggle")
+    async def toggle_peer(peer_id: str):
+        if libp2p_node is not None:
+            raise HTTPException(400, "Peer toggle is simulated-mode only")
+        online = network.toggle_peer_online(peer_id)
+        if online is None:
+            raise HTTPException(404, f"Unknown peer: {peer_id}")
+        return {"status": "ok", "peer_id": peer_id, "online": online}
 
     # -----------------------------------------------------------------------
     # DHT Value Store (real mode only)
@@ -326,12 +395,7 @@ def create_app(
         connected_ws.append(ws)
         logger.info("WebSocket client connected (%d total)", len(connected_ws))
         try:
-            snapshot = {
-                **coordinator.snapshot(),
-                **stream_manager.snapshot(),
-                **network.snapshot(),
-                "ts": time.time(),
-            }
+            snapshot = _full_snapshot()
             await ws.send_text(json.dumps(snapshot, default=str))
 
             while True:
