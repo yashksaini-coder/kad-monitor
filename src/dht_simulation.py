@@ -194,13 +194,13 @@ class SimulatedDHTNetwork:
     # Query function (Kademlia iterative lookup)
     # ------------------------------------------------------------------
 
-    async def query(self, target_peer_id: str) -> tuple[bool, list[str], int]:
+    async def query(self, target_peer_id: str) -> tuple[bool, list[str], int, list[str]]:
         """
         Simulate an iterative Kademlia ``FIND_NODE`` lookup for *target_peer_id*.
 
         Returns
         -------
-        (found, closest_peers, hop_count)
+        (found, closest_peers, hop_count, path)
         """
         assert self._boot_node is not None
         self._stats["queries_served"] += 1
@@ -215,6 +215,7 @@ class SimulatedDHTNetwork:
         candidates = self._boot_node.k_closest(target_peer_id, 3)
         closest: list[str] = []
         hops = 0
+        path: list[str] = []
         max_hops = 20
 
         while candidates and hops < max_hops:
@@ -238,10 +239,11 @@ class SimulatedDHTNetwork:
                 jitter = random.uniform(0, self._scenario["latency_jitter_ms"] / 1000)
                 await trio.sleep(candidate_node.latency_ms / 1000 + jitter)
                 hops += 1
+                path.append(candidate_id)
 
                 # Direct hit?
                 if candidate_id == target_peer_id and target_in_network:
-                    return True, [candidate_id] + candidate_node.k_closest(target_peer_id, 5), hops
+                    return True, [candidate_id] + candidate_node.k_closest(target_peer_id, 5), hops, path
 
                 # Recurse closer
                 closer = candidate_node.k_closest(target_peer_id, 3)
@@ -258,7 +260,7 @@ class SimulatedDHTNetwork:
                 seen.add(pid)
                 deduped_closest.append(pid)
 
-        return False, deduped_closest[:20], hops
+        return False, deduped_closest[:20], hops, path
 
     # ------------------------------------------------------------------
     # Network control plane

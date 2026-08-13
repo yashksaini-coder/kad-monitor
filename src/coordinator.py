@@ -68,6 +68,7 @@ class QueryResult:
     found: bool = False
     closest_peers: list[str] = field(default_factory=list)
     hops: int = 0
+    path: list[str] = field(default_factory=list)
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -81,6 +82,7 @@ class QueryResult:
             "found": self.found,
             "closest_peers": self.closest_peers[:5],
             "hops": self.hops,
+            "path": self.path,
             "error": self.error,
         }
 
@@ -207,7 +209,8 @@ class DHTQueryCoordinator:
         """
         Locate *peer_id* via the supplied async *query_fn*.
 
-        ``query_fn(peer_id)`` must return ``(found: bool, closest_peers: list[str], hops: int)``.
+        ``query_fn(peer_id)`` must return ``(found: bool, closest_peers: list[str], hops: int)``
+        or ``(found: bool, closest_peers: list[str], hops: int, path: list[str])``.
 
         Resource lifecycle
         ------------------
@@ -298,7 +301,9 @@ class DHTQueryCoordinator:
 
         with trio.move_on_after(self._query_timeout) as cancel_scope:
             try:
-                found, closest_peers, hops = await query_fn(lq.peer_id)
+                res = await query_fn(lq.peer_id)
+                found, closest_peers, hops, *rest = res
+                path = list(rest[0]) if rest else []
                 duration_ms = (trio.current_time() - started_at) * 1000
                 self._successes += 1
                 self._total_duration_ms += duration_ms
@@ -311,6 +316,7 @@ class DHTQueryCoordinator:
                     found=found,
                     closest_peers=closest_peers,
                     hops=hops,
+                    path=path,
                 )
             except Exception as exc:
                 duration_ms = (trio.current_time() - started_at) * 1000

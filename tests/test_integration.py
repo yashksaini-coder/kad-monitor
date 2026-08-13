@@ -225,3 +225,32 @@ async def test_full_snapshot_structure(coordinator, network, stream_manager):
     ]
     for key in required_keys:
         assert key in snap, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Lookup path recording
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.trio
+async def test_query_records_lookup_path():
+    network = SimulatedDHTNetwork(node_count=30, scenario="NORMAL")
+    coordinator = DHTQueryCoordinator(
+        max_concurrent_queries=10, max_random_walks=3, query_timeout=30.0
+    )
+
+    async def _query_fn(pid):
+        return await network.query(pid)
+
+    # Retry a few times: NORMAL injects 5% stream errors → occasional FAILED
+    for _ in range(5):
+        target = network.peer_ids[0]
+        result = await coordinator.find_peer(target, _query_fn)
+        if result.status == QueryStatus.SUCCESS:
+            break
+    assert result.status == QueryStatus.SUCCESS
+
+    assert result.hops > 0
+    assert len(result.path) == result.hops
+    assert all(p in network.peer_ids for p in result.path)
+    assert result.to_dict()["path"] == result.path
