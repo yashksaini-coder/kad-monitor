@@ -98,6 +98,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv/
 env/
 venv/
 ENV/
@@ -128,3 +129,7 @@ dmypy.json
 *.swp
 *.swo
 *~
+
+# Demo harness runtime artifacts
+history.db
+reports/
