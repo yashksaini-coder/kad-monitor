@@ -180,10 +180,11 @@ async def test_stream_manager_cap_respected():
 async def test_scenario_affects_latency(coordinator, stream_manager):
     """Stressed scenario should have higher average durations for successful queries."""
     import itertools
+    import random
     import statistics
 
-    normal_net = SimulatedDHTNetwork(node_count=15, scenario="NORMAL")
-    stressed_net = SimulatedDHTNetwork(node_count=15, scenario="STRESSED")
+    # Seeded for determinism — the simulation draws from global random.
+    SEED = 1
 
     async def make_query_fn(net):
         async def _fn(pid: str):
@@ -207,7 +208,14 @@ async def test_scenario_affects_latency(coordinator, stream_manager):
                 durations.append(r.duration_ms)
         return durations
 
+    # Re-seed before each scenario so its draw sequence doesn't depend on how
+    # many random numbers the other scenario's build/query consumed.
+    random.seed(SEED)
+    normal_net = SimulatedDHTNetwork(node_count=15, scenario="NORMAL")
     normal_results = await success_durations(normal_net)
+
+    random.seed(SEED)
+    stressed_net = SimulatedDHTNetwork(node_count=15, scenario="STRESSED")
     stressed_results = await success_durations(stressed_net)
 
     assert len(normal_results) >= 3, "expected at least 3 successful NORMAL queries"
