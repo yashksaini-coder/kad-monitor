@@ -95,13 +95,13 @@ def parse_args():
     )
     p.add_argument(
         "--enable-random-walk",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Enable DHT random walk (real mode)",
+        help="Enable DHT random walk worker",
     )
     p.add_argument(
         "--enable-pubsub",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Enable GossipSub (real mode)",
     )
@@ -141,35 +141,43 @@ def parse_args():
     return p.parse_args()
 
 
-async def main_simulated(args):
-    from src.dht_simulation import SimulatedDHTNetwork
+async def run_server(args):
+    node = None
+    if args.mode == "real":
+        from src.libp2p_node import Libp2pNode, Libp2pNodeConfig, RealDHTNetwork
 
-    logger.info("=" * 60)
-    logger.info("  libp2p DHT Monitor — SIMULATED MODE")
-    logger.info("=" * 60)
+        logger.info("libp2p DHT Monitor — REAL libp2p MODE")
+        node_config = Libp2pNodeConfig(
+            port=args.libp2p_port,
+            enable_mdns=args.enable_mdns,
+            enable_upnp=args.enable_upnp,
+            enable_quic=args.enable_quic,
+            bootstrap_peers=args.bootstrap,
+            enable_random_walk=args.enable_random_walk,
+            enable_pubsub=args.enable_pubsub,
+            max_connections=args.max_connections,
+            max_streams=args.max_libp2p_streams,
+        )
+        node = Libp2pNode(node_config)
+        await node.start()
+        network = RealDHTNetwork(node, scenario=args.scenario)
+        extra = {"mode": "real", "peer_id": node.peer_id,
+                 "listen_addrs": node.get_listen_addresses()}
+    else:
+        from src.dht_simulation import SimulatedDHTNetwork
 
-    logger.info(
-        "Initialising simulated DHT network (%d nodes, scenario=%s)…",
-        args.nodes,
-        args.scenario,
-    )
-    network = SimulatedDHTNetwork(
-        node_count=args.nodes,
-        scenario=args.scenario,
-    )
+        logger.info("libp2p DHT Monitor — SIMULATED MODE")
+        network = SimulatedDHTNetwork(node_count=args.nodes, scenario=args.scenario)
+        extra = {"mode": args.mode}
 
     stream_manager = StreamManager(
         max_streams=args.max_streams,
         stream_timeout=args.query_timeout + 5.0,
     )
-
     broadcast_send, broadcast_recv = trio.open_memory_channel(max_buffer_size=50)
-
-    load_gen_state: dict = {
-        "active": False,
-        "qps": 2.0,
-        "mode": "mixed",
-    }
+    load_gen_state: dict = {"active": False, "qps": 2.0, "mode": "mixed",
+                            "achieved_qps": 0.0}
+    extra["load_gen"] = load_gen_state
 
     async def _on_snapshot(snap: dict) -> None:
         merged = {
@@ -177,8 +185,7 @@ async def main_simulated(args):
             **stream_manager.snapshot(),
             **network.snapshot(),
             "ts": time.time(),
-            "mode": "simulated",
-            "load_gen": dict(load_gen_state),
+            **extra,
         }
         try:
             broadcast_send.send_nowait(merged)
@@ -197,8 +204,8 @@ async def main_simulated(args):
         network=network,
         stream_manager=stream_manager,
         load_gen_state=load_gen_state,
-        libp2p_node=None,
-        mode="simulated",
+        libp2p_node=node,
+        mode=args.mode,
     )
 
     hc_config = hypercorn.config.Config()
@@ -220,192 +227,28 @@ async def main_simulated(args):
                 if ws in connected_ws:
                     connected_ws.remove(ws)
 
-    logger.info("Starting all services on http://%s:%d …", args.host, args.port)
     logger.info("Dashboard → http://localhost:%d/", args.port)
-    logger.info("API docs  → http://localhost:%d/docs", args.port)
-    logger.info("")
-
-    async with trio.open_nursery() as nursery:
-        await nursery.start(
-            metrics_broadcaster,
-            coordinator,
-            network,
-            stream_manager,
-            broadcast_send,
-            args.broadcast_interval,
-            {"mode": "simulated", "load_gen": load_gen_state},
-        )
-
-        nursery.start_soon(_ws_broadcaster)
-
-        await nursery.start(
-            random_walk_worker,
-            coordinator,
-            network,
-            stream_manager,
-            args.walk_interval,
-        )
-
-        await nursery.start(
-            load_generator,
-            coordinator,
-            network,
-            stream_manager,
-            load_gen_state,
-        )
-
-        nursery.start_soon(hypercorn_trio.serve, app, hc_config)
-
-        logger.info("All services running. Press Ctrl+C to stop.")
-
-
-async def main_real(args):
-    from src.libp2p_node import Libp2pNode, Libp2pNodeConfig, RealDHTNetwork
-
-    logger.info("=" * 60)
-    logger.info("  libp2p DHT Monitor — REAL libp2p 0.6.0 MODE")
-    logger.info("  KadDHT + GossipSub + ResourceManager + trio")
-    logger.info("=" * 60)
-
-    node_config = Libp2pNodeConfig(
-        port=args.libp2p_port,
-        enable_mdns=args.enable_mdns,
-        enable_upnp=args.enable_upnp,
-        enable_quic=args.enable_quic,
-        bootstrap_peers=args.bootstrap,
-        enable_random_walk=args.enable_random_walk,
-        enable_pubsub=args.enable_pubsub,
-        max_connections=args.max_connections,
-        max_streams=args.max_libp2p_streams,
-    )
-
-    logger.info("Starting real libp2p node on port %d…", args.libp2p_port)
-    if args.bootstrap:
-        logger.info("Bootstrap peers: %s", args.bootstrap)
-
-    node = Libp2pNode(node_config)
-    await node.start()
-
-    network = RealDHTNetwork(node, scenario=args.scenario)
-
-    stream_manager = StreamManager(
-        max_streams=args.max_streams,
-        stream_timeout=args.query_timeout + 5.0,
-    )
-
-    broadcast_send, broadcast_recv = trio.open_memory_channel(max_buffer_size=50)
-
-    load_gen_state: dict = {
-        "active": False,
-        "qps": 2.0,
-        "mode": "mixed",
-    }
-
-    async def _on_snapshot(snap: dict) -> None:
-        merged = {
-            **snap,
-            **stream_manager.snapshot(),
-            **network.snapshot(),
-            "ts": time.time(),
-            "mode": "real",
-            "peer_id": node.peer_id,
-            "listen_addrs": node.get_listen_addresses(),
-            "load_gen": dict(load_gen_state),
-        }
-        try:
-            broadcast_send.send_nowait(merged)
-        except trio.WouldBlock:
-            pass
-
-    coordinator = DHTQueryCoordinator(
-        max_concurrent_queries=args.max_queries,
-        max_random_walks=args.max_walks,
-        query_timeout=args.query_timeout,
-        on_snapshot=_on_snapshot,
-    )
-
-    app, connected_ws = create_app(
-        coordinator=coordinator,
-        network=network,
-        stream_manager=stream_manager,
-        load_gen_state=load_gen_state,
-        libp2p_node=node,
-        mode="real",
-    )
-
-    http_config = hypercorn.config.Config()
-    http_config.bind = [f"{args.host}:{args.port}"]
-    http_config.use_reloader = False
-    http_config.accesslog = "-"
-    http_config.errorlog = "-"
-    http_config.loglevel = "WARNING"
-
-    async def _ws_broadcaster():
-        async for snapshot in broadcast_recv:
-            dead = []
-            for ws in list(connected_ws):
-                try:
-                    await ws.send_text(json.dumps(snapshot, default=str))
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                if ws in connected_ws:
-                    connected_ws.remove(ws)
-
-    logger.info("Starting all services on http://%s:%d …", args.host, args.port)
-    logger.info("Dashboard → http://localhost:%d/", args.port)
-    logger.info("API docs  → http://localhost:%d/docs", args.port)
-    logger.info("libp2p Peer ID: %s", node.peer_id)
-    logger.info("libp2p Addresses: %s", node.get_listen_addresses())
-    logger.info("ResourceManager: enabled (max_conn=%d, max_streams=%d)",
-                args.max_connections, args.max_libp2p_streams)
-    logger.info("PubSub: %s", "GossipSub enabled" if args.enable_pubsub else "disabled")
-    logger.info("")
-
     try:
         async with trio.open_nursery() as nursery:
-            await nursery.start(
-                metrics_broadcaster,
-                coordinator,
-                network,
-                stream_manager,
-                broadcast_send,
-                args.broadcast_interval,
-                {"mode": "real", "load_gen": load_gen_state},
-            )
-
+            await nursery.start(metrics_broadcaster, coordinator, network,
+                                stream_manager, broadcast_send,
+                                args.broadcast_interval, extra)
             nursery.start_soon(_ws_broadcaster)
-
             if args.enable_random_walk:
-                await nursery.start(
-                    random_walk_worker,
-                    coordinator,
-                    network,
-                    stream_manager,
-                    args.walk_interval,
-                )
-
-            await nursery.start(
-                load_generator,
-                coordinator,
-                network,
-                stream_manager,
-                load_gen_state,
-            )
-
-            nursery.start_soon(hypercorn_trio.serve, app, http_config)
-
+                await nursery.start(random_walk_worker, coordinator, network,
+                                    stream_manager, args.walk_interval)
+            await nursery.start(load_generator, coordinator, network,
+                                stream_manager, load_gen_state)
+            nursery.start_soon(hypercorn_trio.serve, app, hc_config)
             logger.info("All services running. Press Ctrl+C to stop.")
     finally:
-        logger.info("Stopping libp2p node...")
-        await node.stop()
+        if node is not None:
+            logger.info("Stopping libp2p node...")
+            await node.stop()
 
 
 async def main(args):
-    if args.mode == "real":
-        await main_real(args)
-    else:
-        await main_simulated(args)
+    await run_server(args)
 
 
 if __name__ == "__main__":
