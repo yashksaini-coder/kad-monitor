@@ -1,8 +1,8 @@
 # kad-monitor: Demo Harness Completion — Design
 
 **Date:** 2026-08-13
-**Status:** Approved (direction and design approved in brainstorming session)
-**Direction:** Complete the simulation-based demo harness end to end. Real-libp2p deep work and metrics persistence are explicitly out of scope.
+**Status:** Approved (direction and design approved in brainstorming session; extended same day with Phases 4–5 — experiment runner, CI, deployment, persistence — after from-scratch goals review)
+**Direction:** Complete the simulation-based demo harness end to end, then make it a deployable, self-proving product. Real-libp2p deep work is explicitly out of scope.
 
 ## Context
 
@@ -20,12 +20,15 @@ kad-monitor demonstrates that dual-layer `trio.CapacityLimiter` back-pressure pr
 2. The load generator actually saturates the coordinator; the dashboard shows requested vs. achieved QPS so back-pressure is visible.
 3. Every simulated-mode capability the backend has is reachable from the dashboard.
 4. The gaps that let the P0s survive are closed with tests.
+5. **The harness proves its own thesis:** a scripted A/B experiment (coordinator caps off vs. on, same workload) produces a reproducible before/after report.
+6. **One-command deployment:** `docker compose up` serves the dashboard on any host; CI runs the full suite on every push.
 
 ## Non-Goals (YAGNI)
 
 - Real-mode integrity work: real hop counting, pubsub receive loop, binding StreamManager to real libp2p streams. (Future "Direction B".)
-- Metrics persistence, history API, Prometheus export. (Future "Direction C".)
 - Solving the libp2p-on-Python-3.14 install problem. Real mode stays code-complete but optional and unverified.
+- Public always-on hosted instance (auth, uptime, abuse concerns). Compose-on-any-host is the ceiling.
+- Kubernetes or multi-container orchestration. One container is the right size for this tool.
 
 ## Architecture (unchanged)
 
@@ -95,6 +98,25 @@ HTML-escape peer IDs and any server-derived strings in the two `innerHTML` rende
 - Dead code sweep: `_dht_cancel_scope`, unused imports (`Any`, `math`, `time`), deprecated `@app.on_event` → lifespan.
 - README corrections: directory name in quick-start, project-structure listing (add `main.py` sections that exist, list `libp2p_node.py`), replace the stale `from libp2p import new_node` sample with the actual `RealDHTNetwork` usage, document the optional-libp2p install.
 
+## Phase 4 — A/B experiment runner (the "production-grade" differentiator)
+
+Turns "watch the dashboard and squint" into evidence. Runs headless and in-process (no HTTP server) against the simulated network.
+
+- **Config:** a small JSON file (`experiments/*.json`) defining: node count, scenario, workload (target QPS, duration seconds), and the two coordinator configs — `unprotected` (caps set effectively unlimited, e.g. 10_000) and `protected` (real caps, e.g. max_queries=10, max_walks=3).
+- **Runner:** `src/experiment.py` builds network + StreamManager + coordinator per arm, drives the (fixed) load generator at the configured QPS for the configured duration, samples coordinator/stream snapshots every 0.5s, and computes per-arm summaries: achieved QPS, success/failure/timeout counts, p50/p95/p99 latency, peak concurrency, peak limiter utilisation.
+- **Report:** JSON written to `reports/<name>-<timestamp>.json` plus a self-contained HTML report (inline CSS/JS, side-by-side arm comparison tables + verdict line). Timestamp comes from the caller.
+- **CLI:** `python main.py --experiment experiments/baseline.json` runs both arms sequentially and prints the report paths. No dashboard integration (YAGNI — the report is the artifact).
+- A default `experiments/baseline.json` ships in the repo and is exercised by tests (short duration).
+
+## Phase 5 — CI, packaging, deployment, persistence
+
+- **Packaging:** `pyproject.toml` with project metadata, dependencies, and pytest/tool config (replaces the Phase 1 standalone pytest config; requirements.txt kept as a thin mirror for the README quick-start).
+- **CI:** GitHub Actions workflow — checkout, install, `pytest tests/ -v` on push/PR. Simulated-mode only (no libp2p in CI; the importorskip from Phase 1 makes this clean).
+- **Health endpoint:** `GET /healthz` returning `{"status": "ok"}` plus basic liveness facts (uptime, mode) — used by the Docker healthcheck.
+- **Prometheus metrics:** `GET /metrics` in text exposition format, hand-rendered from the existing snapshot counters/gauges (~15 series: query counters by status, limiter tokens/capacity, achieved QPS). No new dependency.
+- **Snapshot history:** `src/history.py` — SQLite (stdlib `sqlite3`) writer fed from the metrics_broadcaster tick, storing one row per tick (timestamp + JSON snapshot), bounded by age (default: keep 24h, pruned periodically). `GET /api/history?minutes=N` returns downsampled series; the dashboard hydrates its charts from it on page load so charts survive reloads.
+- **Docker:** multi-stage Dockerfile (slim Python base, non-root user), `docker-compose.yml` with port mapping, a volume for the SQLite file, and a healthcheck hitting `/healthz`.
+
 ## Error handling
 
 Coordinator's SUCCESS/FAILED/TIMEOUT/CANCELLED classification is unchanged. New routes follow existing FastAPI error conventions (400 for wrong mode, 404 for unknown peer). `_emit` failures become visible via logging.
@@ -106,8 +128,10 @@ Coordinator's SUCCESS/FAILED/TIMEOUT/CANCELLED classification is unchanged. New 
 | `test_coordinator.py` (18 tests) | keep green, untouched |
 | `test_integration.py` | two fixes (vacuous + flaky), otherwise keep |
 | `test_libp2p_node.py` | `importorskip`, otherwise untouched |
-| `test_api.py` (new) | endpoint coverage incl. new peer-chaos routes |
+| `test_api.py` (new) | endpoint coverage incl. new peer-chaos routes, /healthz, /metrics, /api/history |
 | `test_workers.py` (new) | loadgen concurrency regression + broadcaster tick |
+| `test_experiment.py` (new) | short A/B run produces both arms + report files; protected arm respects caps |
+| `test_history.py` (new) | write/prune/query roundtrip on the SQLite store |
 
 ## Success criteria
 
@@ -116,3 +140,6 @@ Coordinator's SUCCESS/FAILED/TIMEOUT/CANCELLED classification is unchanged. New 
 3. Every scenario, peer-chaos action, and config field is operable from the dashboard; event log narrates it.
 4. Most recent query's lookup path renders on the topology view.
 5. `pytest tests/ -v` fully green without libp2p installed.
+6. `python main.py --experiment experiments/baseline.json` produces a JSON + HTML report where the unprotected arm shows exhaustion symptoms and the protected arm shows bounded concurrency.
+7. `docker compose up` → dashboard live with a passing healthcheck; charts survive a page reload (history hydration).
+8. GitHub Actions runs the suite green on push.
