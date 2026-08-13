@@ -320,6 +320,34 @@ async def test_empty_peer_id_handled():
 
 
 @pytest.mark.trio
+async def test_snapshot_latency_percentiles(autojump_clock):
+    coord = DHTQueryCoordinator(
+        max_concurrent_queries=10, max_random_walks=3, query_timeout=30.0
+    )
+
+    def make_query_fn(delay_s):
+        async def _fn(pid):
+            await trio.sleep(delay_s)
+            return True, [], 1
+        return _fn
+
+    # 20 queries: durations 0.1s .. 2.0s
+    for i in range(1, 21):
+        await coord.find_peer(f"peer-{i}", make_query_fn(i * 0.1))
+
+    rates = coord.snapshot()["coordinator"]["rates"]
+    assert 0 < rates["p50_ms"] <= rates["p95_ms"] <= rates["p99_ms"]
+    assert 900 <= rates["p50_ms"] <= 1200   # median ≈ 1.05s
+    assert rates["p99_ms"] <= 2100
+
+
+def test_percentiles_empty_history():
+    coord = DHTQueryCoordinator(max_concurrent_queries=10, max_random_walks=3)
+    rates = coord.snapshot()["coordinator"]["rates"]
+    assert rates["p50_ms"] == rates["p95_ms"] == rates["p99_ms"] == 0.0
+
+
+@pytest.mark.trio
 async def test_concurrent_mixed_priority():
     """Mix of user + background queries all complete successfully."""
     coord = make_coordinator(
