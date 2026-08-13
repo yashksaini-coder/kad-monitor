@@ -58,11 +58,11 @@ class QueryRequest(BaseModel):
 
 
 class ConfigRequest(BaseModel):
-    max_concurrent_queries: int | None = None
-    max_random_walks: int | None = None
-    query_timeout: float | None = None
-    max_streams: int | None = None
-    stream_timeout: float | None = None
+    max_concurrent_queries: int | None = Field(default=None, ge=1)
+    max_random_walks: int | None = Field(default=None, ge=1)
+    query_timeout: float | None = Field(default=None, gt=0)
+    max_streams: int | None = Field(default=None, ge=1)
+    stream_timeout: float | None = Field(default=None, gt=0)
 
 
 class ScenarioRequest(BaseModel):
@@ -207,6 +207,23 @@ def create_app(
 
     @app.post("/api/config")
     async def update_config(req: ConfigRequest):
+        current = coordinator.snapshot()["coordinator"]["config"]
+        effective_queries = (
+            req.max_concurrent_queries
+            if req.max_concurrent_queries is not None
+            else current["max_concurrent_queries"]
+        )
+        effective_walks = (
+            req.max_random_walks
+            if req.max_random_walks is not None
+            else current["max_random_walks"]
+        )
+        if effective_walks >= effective_queries:
+            raise HTTPException(
+                400,
+                "max_random_walks must be < max_concurrent_queries "
+                "to preserve capacity for user queries.",
+            )
         coordinator.reconfigure(
             max_concurrent_queries=req.max_concurrent_queries,
             max_random_walks=req.max_random_walks,
