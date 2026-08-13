@@ -7,9 +7,9 @@ Acts as the *final* authority on how many physical streams the local node
 may hold open simultaneously.  All DHT traffic (both user queries and random
 walks) flows through this gate before any bytes are sent on the wire.
 
-This is "Layer A" of the dual-gate strategy; the DHTQueryCoordinator is the
-higher-level "Layer B" that governs *logical* operations before they even
-reach the stream level.
+This is "Layer C" of the dual-gate strategy; the DHTQueryCoordinator holds
+"Layer A" (queries) and "Layer B" (random walks), which govern *logical*
+operations before they even reach the stream level.
 
 Design goals
 ------------

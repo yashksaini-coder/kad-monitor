@@ -58,7 +58,7 @@ async def test_find_known_peer(coordinator, network, stream_manager):
             return await network.query(pid)
 
     result = await coordinator.find_peer(target, query_fn)
-    assert result.status in (QueryStatus.SUCCESS, QueryStatus.TIMEOUT)
+    assert result.status in (QueryStatus.SUCCESS, QueryStatus.TIMEOUT, QueryStatus.FAILED)
     # Network simulation may or may not succeed, but it should not hang
 
 
@@ -201,9 +201,10 @@ async def test_scenario_affects_latency(coordinator, stream_manager):
         stressed_results.append(r.duration_ms)
 
     # Stressed queries should generally take longer
-    if normal_results and stressed_results:
-        assert statistics.mean(stressed_results) >= statistics.mean(normal_results) * 0.5
-        # Relaxed bound — we just want to confirm direction, not exact numbers
+    assert statistics.mean(stressed_results) > statistics.mean(normal_results), (
+        f"STRESSED (base 400ms) must be slower than NORMAL (base 40ms): "
+        f"{statistics.mean(stressed_results):.0f}ms vs {statistics.mean(normal_results):.0f}ms"
+    )
 
 
 # ---------------------------------------------------------------------------

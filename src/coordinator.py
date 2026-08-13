@@ -21,7 +21,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 import trio
 
@@ -366,7 +366,7 @@ class DHTQueryCoordinator:
             try:
                 await self._on_snapshot(self.snapshot())
             except Exception:
-                pass  # never let broadcast errors kill a query
+                logger.exception("on_snapshot callback failed")
 
     # ------------------------------------------------------------------
     # Snapshot (serialisable)
